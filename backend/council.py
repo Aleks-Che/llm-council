@@ -1,8 +1,8 @@
 """3-stage LLM Council orchestration."""
 
 from typing import List, Dict, Any, Tuple
-from .openrouter import query_models_parallel, query_model
-from .config import COUNCIL_MODELS, CHAIRMAN_MODEL
+from .client import query_models_parallel, query_model
+from .config import COUNCIL_MODELS, CHAIRMAN_MODEL, TITLE_MODEL
 
 
 async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
@@ -61,36 +61,36 @@ async def stage2_collect_rankings(
         for label, result in zip(labels, stage1_results)
     ])
 
-    ranking_prompt = f"""You are evaluating different responses to the following question:
+    ranking_prompt = f"""Ты оцениваешь различные ответы на следующий вопрос:
 
-Question: {user_query}
+Вопрос: {user_query}
 
-Here are the responses from different models (anonymized):
+Вот ответы разных моделей (анонимизированные):
 
 {responses_text}
 
-Your task:
-1. First, evaluate each response individually. For each response, explain what it does well and what it does poorly.
-2. Then, at the very end of your response, provide a final ranking.
+Твоя задача:
+1. Сначала оцени каждый ответ по отдельности. Для каждого ответа объясни, что в нём сделано хорошо, а что плохо.
+2. Затем, в самом конце своего ответа, приведи итоговый рейтинг.
 
-IMPORTANT: Your final ranking MUST be formatted EXACTLY as follows:
-- Start with the line "FINAL RANKING:" (all caps, with colon)
-- Then list the responses from best to worst as a numbered list
-- Each line should be: number, period, space, then ONLY the response label (e.g., "1. Response A")
-- Do not add any other text or explanations in the ranking section
+ВАЖНО: Твой итоговый рейтинг ДОЛЖЕН быть отформатирован ТОЧНО следующим образом:
+- Начни со строки "FINAL RANKING:" (именно так, заглавными буквами, с двоеточием)
+- Затем перечисли ответы от лучшего к худшему в виде нумерованного списка
+- Каждая строка должна содержать: номер, точку, пробел, затем ТОЛЬКО метку ответа (например, "1. Response A")
+- Не добавляй никакого другого текста или пояснений в разделе рейтинга
 
-Example of the correct format for your ENTIRE response:
+Пример правильного формата ВСЕГО твоего ответа:
 
-Response A provides good detail on X but misses Y...
-Response B is accurate but lacks depth on Z...
-Response C offers the most comprehensive answer...
+Response A хорошо раскрывает X, но упускает Y...
+Response B точен, но ему не хватает глубины в Z...
+Response C даёт наиболее полный ответ...
 
 FINAL RANKING:
 1. Response C
 2. Response A
 3. Response B
 
-Now provide your evaluation and ranking:"""
+Теперь приведи свою оценку и рейтинг:"""
 
     messages = [{"role": "user", "content": ranking_prompt}]
 
@@ -130,46 +130,48 @@ async def stage3_synthesize_final(
     """
     # Build comprehensive context for chairman
     stage1_text = "\n\n".join([
-        f"Model: {result['model']}\nResponse: {result['response']}"
+        f"Модель: {result['model']}\nОтвет: {result['response']}"
         for result in stage1_results
     ])
 
     stage2_text = "\n\n".join([
-        f"Model: {result['model']}\nRanking: {result['ranking']}"
+        f"Модель: {result['model']}\nОценка: {result['ranking']}"
         for result in stage2_results
     ])
 
-    chairman_prompt = f"""You are the Chairman of an LLM Council. Multiple AI models have provided responses to a user's question, and then ranked each other's responses.
+    chairman_prompt = f"""Ты — Председатель Совета LLM. Несколько ИИ-моделей дали ответы на вопрос пользователя, а затем оценили ответы друг друга.
 
-Original Question: {user_query}
+Исходный вопрос: {user_query}
 
-STAGE 1 - Individual Responses:
+ЭТАП 1 — Индивидуальные ответы:
 {stage1_text}
 
-STAGE 2 - Peer Rankings:
+ЭТАП 2 — Взаимные оценки:
 {stage2_text}
 
-Your task as Chairman is to synthesize all of this information into a single, comprehensive, accurate answer to the user's original question. Consider:
-- The individual responses and their insights
-- The peer rankings and what they reveal about response quality
-- Any patterns of agreement or disagreement
+Твоя задача как Председателя — синтезировать всю эту информацию в единый, исчерпывающий и точный ответ на исходный вопрос пользователя. Учитывай:
+- Индивидуальные ответы и содержащиеся в них идеи
+- Взаимные оценки и то, что они говорят о качестве ответов
+- Любые закономерности согласия или разногласий
 
-Provide a clear, well-reasoned final answer that represents the council's collective wisdom:"""
+Дай чёткий, обоснованный финальный ответ, отражающий коллективную мудрость совета:"""
 
     messages = [{"role": "user", "content": chairman_prompt}]
 
-    # Query the chairman model
-    response = await query_model(CHAIRMAN_MODEL, messages)
+# Query the chairman model
+    response = await query_model(*CHAIRMAN_MODEL, messages)
+
+    chairman_id = f"{CHAIRMAN_MODEL[0]}/{CHAIRMAN_MODEL[1]}"
 
     if response is None:
         # Fallback if chairman fails
         return {
-            "model": CHAIRMAN_MODEL,
-            "response": "Error: Unable to generate final synthesis."
+            "model": chairman_id,
+            "response": "Ошибка: не удалось сгенерировать итоговый синтез."
         }
 
     return {
-        "model": CHAIRMAN_MODEL,
+        "model": chairman_id,
         "response": response.get('content', '')
     }
 
@@ -265,23 +267,24 @@ async def generate_conversation_title(user_query: str) -> str:
     Returns:
         A short title (3-5 words)
     """
-    title_prompt = f"""Generate a very short title (3-5 words maximum) that summarizes the following question.
-The title should be concise and descriptive. Do not use quotes or punctuation in the title.
+    title_prompt = f"""Составь очень короткий заголовок (максимум 3-5 слов), обобщающий следующий вопрос.
+Заголовок должен быть кратким и ёмким. Не используй кавычки и знаки препинания в заголовке.
 
-Question: {user_query}
+Вопрос: {user_query}
 
-Title:"""
+Заголовок:"""
 
     messages = [{"role": "user", "content": title_prompt}]
 
-    # Use gemini-2.5-flash for title generation (fast and cheap)
-    response = await query_model("google/gemini-2.5-flash", messages, timeout=30.0)
+    # Title generation runs in parallel with the council; reasoning models
+    # can be slow, so allow a generous timeout (fallback title otherwise).
+    response = await query_model(*TITLE_MODEL, messages, timeout=180.0)
 
     if response is None:
         # Fallback to a generic title
-        return "New Conversation"
+        return "Новый диалог"
 
-    title = response.get('content', 'New Conversation').strip()
+    title = response.get('content', 'Новый диалог').strip()
 
     # Clean up the title - remove quotes, limit length
     title = title.strip('"\'')
@@ -310,7 +313,7 @@ async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
     if not stage1_results:
         return [], [], {
             "model": "error",
-            "response": "All models failed to respond. Please try again."
+            "response": "Все модели не смогли ответить. Попробуйте ещё раз."
         }, {}
 
     # Stage 2: Collect rankings

@@ -11,13 +11,13 @@ LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively
 ### Backend Structure (`backend/`)
 
 **`config.py`**
-- Contains `COUNCIL_MODELS` (list of OpenRouter model identifiers)
+- Contains `COUNCIL_MODELS` (list of (provider, model_name) tuples routed by the proxy)
 - Contains `CHAIRMAN_MODEL` (model that synthesizes final answer)
-- Uses environment variable `OPENROUTER_API_KEY` from `.env`
-- Backend runs on **port 8001** (NOT 8000 - user had another app on 8000)
+- Uses `OPENAI_COMPATIBLE_URL`/`OPENAI_COMPATIBLE_KEY` from `.env` (points to a local OpenAI-compatible proxy, e.g. LM-Proxy)
+- Backend runs on **port 8002**; the LLM proxy listens on **port 8001**
 
-**`openrouter.py`**
-- `query_model()`: Single async model query
+**`client.py`** (replaces the old `openrouter.py`)
+- `query_model()`: Single async model query. Default timeout is **600s** — the proxy enables reasoning/thinking on upstreams, and big open-ended prompts can take 2-9 minutes; short timeouts silently kill Stage 1 responses (returns None on failure).
 - `query_models_parallel()`: Parallel queries using `asyncio.gather()`
 - Returns dict with 'content' and optional 'reasoning_details'
 - Graceful degradation: returns None on failure, continues with successful responses
@@ -115,9 +115,10 @@ This strict format allows reliable parsing while still getting thoughtful evalua
 All backend modules use relative imports (e.g., `from .config import ...`) not absolute imports. This is critical for Python's module system to work correctly when running as `python -m backend.main`.
 
 ### Port Configuration
-- Backend: 8001 (changed from 8000 to avoid conflict)
+- Backend: 8002
+- LLM proxy (LM-Proxy, separate repo `proxy-llm`): 8001 (`OPENAI_COMPATIBLE_URL=http://localhost:8001/v1`)
 - Frontend: 5173 (Vite default)
-- Update both `backend/main.py` and `frontend/src/api.js` if changing
+- Update both `backend/main.py` and `frontend/src/api.js` if changing the backend port
 
 ### Markdown Rendering
 All ReactMarkdown components must be wrapped in `<div className="markdown-content">` for proper spacing. This class is defined globally in `index.css`.
@@ -143,7 +144,7 @@ Models are hardcoded in `backend/config.py`. Chairman can be same or different f
 
 ## Testing Notes
 
-Use `test_openrouter.py` to verify API connectivity and test different model identifiers before adding to council. The script tests both streaming and non-streaming modes.
+Use `python -m backend.test_providers` to verify proxy connectivity and test different model identifiers before adding to council. Supports `--model`, `--prompt`, `--no-parallel`, `--timeout`.
 
 ## Data Flow Summary
 

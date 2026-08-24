@@ -33,7 +33,7 @@ def create_conversation(conversation_id: str) -> Dict[str, Any]:
     conversation = {
         "id": conversation_id,
         "created_at": datetime.utcnow().isoformat(),
-        "title": "New Conversation",
+        "title": "Новый диалог",
         "messages": []
     }
 
@@ -97,7 +97,7 @@ def list_conversations() -> List[Dict[str, Any]]:
                 conversations.append({
                     "id": data["id"],
                     "created_at": data["created_at"],
-                    "title": data.get("title", "New Conversation"),
+                    "title": data.get("title", "Новый диалог"),
                     "message_count": len(data["messages"])
                 })
 
@@ -170,3 +170,21 @@ def update_conversation_title(conversation_id: str, title: str):
 
     conversation["title"] = title
     save_conversation(conversation)
+
+
+def delete_conversation(conversation_id: str) -> bool:
+    """
+    Delete a conversation from storage.
+
+    Args:
+        conversation_id: Conversation identifier
+
+    Returns:
+        True if the conversation was deleted, False if it didn't exist
+    """
+    path = get_conversation_path(conversation_id)
+    if not os.path.exists(path):
+        return False
+
+    os.remove(path)
+    return True

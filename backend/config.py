@@ -5,22 +5,30 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# OpenRouter API key
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+# OpenAI-compatible proxy (e.g. LiteLLM). Replaces the previous OpenRouter integration.
+OPENAI_COMPATIBLE_URL = os.getenv(
+    "OPENAI_COMPATIBLE_URL", "http://localhost:8001/v1"
+)
+# Optional. Many local proxies do not require auth; header is omitted when unset.
+OPENAI_COMPATIBLE_KEY = os.getenv("OPENAI_COMPATIBLE_KEY")
 
-# Council members - list of OpenRouter model identifiers
+# Council members - list of (provider, model_name) tuples.
 COUNCIL_MODELS = [
-    "openai/gpt-5.1",
-    "google/gemini-3-pro-preview",
-    "anthropic/claude-sonnet-4.5",
-    "x-ai/grok-4",
+    ("moonshot", "kimi-k3"),
+    ("alibaba", "deepseek-v4-pro"),
+    ("alibaba", "qwen3.8-max"),
+    ("alibaba", "glm-5.2"),
+    ("x-ai", "grok-4.6"),
 ]
 
-# Chairman model - synthesizes final response
-CHAIRMAN_MODEL = "google/gemini-3-pro-preview"
+# Chairman model - synthesizes final response.
+CHAIRMAN_MODEL = ("moonshot", "kimi-k3")
 
-# OpenRouter API endpoint
-OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+# Convenience for title generation - small/fast model exposed by the proxy.
+TITLE_MODEL = ("alibaba", "deepseek-v4-flash")
+
+# Chat completions endpoint derived from the base URL.
+CHAT_COMPLETIONS_URL = OPENAI_COMPATIBLE_URL.rstrip("/") + "/chat/completions"
 
 # Data directory for conversation storage
 DATA_DIR = "data/conversations"
