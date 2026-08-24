@@ -4,6 +4,7 @@
   flex-direction: column;
   height: 100vh;
   background: #ffffff;
+  position: relative;
 }
 
 .messages-container {
@@ -107,6 +108,120 @@
   padding: 24px;
   border-top: 1px solid #e0e0e0;
   background: #fafafa;
+}
+
+.input-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.attach-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
+  border-radius: 8px;
+  color: #666;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+  flex-shrink: 0;
+}
+
+.attach-button:hover:not(:disabled) {
+  color: #4a90e2;
+  border-color: #4a90e2;
+  background: #f0f7ff;
+}
+
+.attach-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.attachments-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #eef4fb;
+  border: 1px solid #c9dcf2;
+  border-radius: 14px;
+  font-size: 13px;
+  color: #33527a;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-size {
+  color: #7a93b5;
+  font-size: 12px;
+}
+
+.attachment-remove {
+  border: none;
+  background: none;
+  color: #7a93b5;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 2px;
+}
+
+.attachment-remove:hover {
+  color: #c0392b;
+}
+
+.attach-error {
+  color: #c0392b;
+  font-size: 13px;
+}
+
+.message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.chat-interface.drag-over {
+  outline: 2px dashed #4a90e2;
+  outline-offset: -6px;
+}
+
+.drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(74, 144, 226, 0.08);
+  pointer-events: none;
+}
+
+.drop-overlay-inner {
+  padding: 16px 24px;
+  background: #ffffff;
+  border: 2px dashed #4a90e2;
+  border-radius: 12px;
+  color: #33527a;
+  font-size: 16px;
+  font-weight: 600;
 }
 
 .message-input {
