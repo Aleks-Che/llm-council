@@ -229,6 +229,42 @@ export default function ChatInterface({
                 <div className="assistant-message">
                   <div className="message-label">LLM Council</div>
 
+                  {/* Stage progress: ✓ done / spinner running / ○ pending */}
+                  {(msg.stage1 ||
+                    msg.stage2 ||
+                    msg.stage3 ||
+                    msg.loading?.stage1 ||
+                    msg.loading?.stage2 ||
+                    msg.loading?.stage3) && (
+                    <div className="stage-progress">
+                      {[
+                        { key: 'stage1', label: 'Этап 1: Ответы моделей' },
+                        { key: 'stage2', label: 'Этап 2: Ранжирование' },
+                        { key: 'stage3', label: 'Этап 3: Финальный синтез' },
+                      ].map((s) => {
+                        const done = Boolean(msg[s.key]);
+                        const running = Boolean(msg.loading?.[s.key]);
+                        return (
+                          <span
+                            key={s.key}
+                            className={`stage-chip ${
+                              done ? 'done' : running ? 'running' : 'pending'
+                            }`}
+                          >
+                            {done ? (
+                              <span className="stage-chip-icon">✓</span>
+                            ) : running ? (
+                              <span className="stage-chip-spinner"></span>
+                            ) : (
+                              <span className="stage-chip-icon">○</span>
+                            )}
+                            {s.label}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   {/* Stage 1 */}
                   {msg.loading?.stage1 && (
                     <div className="stage-loading">
@@ -270,7 +306,21 @@ export default function ChatInterface({
         {isLoading && (
           <div className="loading-indicator">
             <div className="spinner"></div>
-            <span>Совет рассматривает вопрос...</span>
+            <span>
+              {(() => {
+                const last =
+                  conversation.messages[conversation.messages.length - 1];
+                if (last?.role === 'assistant') {
+                  if (last.loading?.stage1)
+                    return 'Этап 1: Сбор индивидуальных ответов...';
+                  if (last.loading?.stage2)
+                    return 'Этап 2: Взаимное ранжирование...';
+                  if (last.loading?.stage3)
+                    return 'Этап 3: Финальный синтез...';
+                }
+                return 'Совет рассматривает вопрос...';
+              })()}
+            </span>
           </div>
         )}
 
