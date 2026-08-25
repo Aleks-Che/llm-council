@@ -17,6 +17,9 @@ export default function Sidebar({
   onNewConversation,
   onRenameConversation,
   onDeleteConversation,
+  activeSection,
+  navVisible,
+  onNavigate,
 }) {
   const [contextMenu, setContextMenu] = useState(null);
   const [editingId, setEditingId] = useState(null);
@@ -149,6 +152,29 @@ export default function Sidebar({
                       {conv.message_count}{' '}
                       {plural(conv.message_count, ['сообщение', 'сообщения', 'сообщений'])}
                     </div>
+                    {conv.id === currentConversationId && navVisible && (
+                      <div
+                        className="conv-nav"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {[
+                          { id: 'user', label: 'Запрос пользователя' },
+                          { id: 'stage1', label: 'Этап 1: Ответы' },
+                          { id: 'stage2', label: 'Этап 2: Ранжирование' },
+                          { id: 'stage3', label: 'Этап 3: Синтез' },
+                        ].map((s) => (
+                          <button
+                            key={s.id}
+                            className={`conv-nav-item ${
+                              activeSection === s.id ? 'active' : ''
+                            }`}
+                            onClick={() => onNavigate?.(s.id)}
+                          >
+                            {s.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </>
                 )}
               </div>

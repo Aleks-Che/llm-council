@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
+import ErrorBoundary from './components/ErrorBoundary';
 import { api } from './api';
 import './App.css';
 
@@ -13,6 +14,10 @@ function App() {
   // Позволяет переключаться между диалогами, не прерывая поток,
   // и запускать несколько диалогов одновременно.
   const [activeRuns, setActiveRuns] = useState({});
+  // Навигация по зонам ответа: user / stage1 / stage2 / stage3.
+  // По умолчанию — stage3 (автопрокрутка вниз).
+  const [activeSection, setActiveSection] = useState('stage3');
+  const chatScrollRef = useRef(null);
 
   const loadConversations = async () => {
     try {
@@ -62,6 +67,7 @@ function App() {
 
   const handleSelectConversation = (id) => {
     setCurrentConversationId(id);
+    setActiveSection('stage3'); // при открытии диалога навигация на финальный этап
   };
 
   const handleRenameConversation = async (id, newTitle) => {
@@ -265,12 +271,19 @@ function App() {
         onNewConversation={handleNewConversation}
         onRenameConversation={handleRenameConversation}
         onDeleteConversation={handleDeleteConversation}
+        activeSection={activeSection}
+        navVisible={Boolean(displayedConversation?.messages?.length)}
+        onNavigate={(sectionId) => chatScrollRef.current?.(sectionId)}
       />
-      <ChatInterface
-        conversation={displayedConversation}
-        onSendMessage={handleSendMessage}
-        isLoading={isCurrentRunning}
-      />
+      <ErrorBoundary>
+        <ChatInterface
+          conversation={displayedConversation}
+          onSendMessage={handleSendMessage}
+          isLoading={isCurrentRunning}
+          onActiveSectionChange={setActiveSection}
+          scrollApiRef={chatScrollRef}
+        />
+      </ErrorBoundary>
     </div>
   );
 }

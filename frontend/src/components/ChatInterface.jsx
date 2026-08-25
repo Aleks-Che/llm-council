@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import Stage1 from './Stage1';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
+import ErrorBoundary from './ErrorBoundary';
 import './ChatInterface.css';
 
 const MAX_FILE_SIZE = 1024 * 1024; // 1 MB на файл
@@ -39,12 +40,16 @@ export default function ChatInterface({
   conversation,
   onSendMessage,
   isLoading,
+  onActiveSectionChange,
+  scrollApiRef,
 }) {
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
   const [attachError, setAttachError] = useState(null);
   const messagesEndRef = useRef(null);
+  const messagesContainerRef = useRef(null);
+  const sectionRefs = useRef({});
   const fileInputRef = useRef(null);
   const dragDepthRef = useRef(0);
 
@@ -55,6 +60,44 @@ export default function ChatInterface({
   useEffect(() => {
     scrollToBottom();
   }, [conversation]);
+
+  // Навигация: App вызывает scrollApiRef.current(sectionId) для скролла к зоне
+  useEffect(() => {
+    if (!scrollApiRef) return;
+    scrollApiRef.current = (sectionId) => {
+      sectionRefs.current[sectionId]?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'start',
+      });
+    };
+    return () => {
+      scrollApiRef.current = null;
+    };
+  }, [scrollApiRef]);
+
+  // Scroll-spy: какая зона сейчас видна → активная кнопка в навигации
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container || !onActiveSectionChange) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort(
+            (a, b) => a.boundingClientRect.top - b.boundingClientRect.top
+          );
+        if (visible.length > 0) {
+          onActiveSectionChange(visible[0].target.dataset.section);
+        }
+      },
+      { root: container, rootMargin: '-10% 0px -65% 0px', threshold: 0 }
+    );
+    ['user', 'stage1', 'stage2', 'stage3'].forEach((id) => {
+      const el = sectionRefs.current[id];
+      if (el) observer.observe(el);
+    });
+    return () => observer.disconnect();
+  }, [conversation, onActiveSectionChange]);
 
   const addFiles = async (fileList) => {
     setAttachError(null);
@@ -195,17 +238,29 @@ export default function ChatInterface({
         </div>
       )}
 
-      <div className="messages-container">
+      <div className="messages-container" ref={messagesContainerRef}>
         {conversation.messages.length === 0 ? (
           <div className="empty-state">
             <h2>Начните диалог</h2>
             <p>Задайте вопрос Совету LLM</p>
           </div>
         ) : (
-          conversation.messages.map((msg, index) => (
-            <div key={index} className="message-group">
+          conversation.messages.map((msg, index) => {
+            const isLastExchange =
+              index >= conversation.messages.length - 2;
+            const setSectionRef = (id) => (el) => {
+              if (el) sectionRefs.current[id] = el;
+              else delete sectionRefs.current[id];
+            };
+            return (
+            <ErrorBoundary key={index}>
+            <div className="message-group">
               {msg.role === 'user' ? (
-                <div className="user-message">
+                <div
+                  className="user-message"
+                  ref={isLastExchange ? setSectionRef('user') : undefined}
+                  data-section="user"
+                >
                   <div className="message-label">Вы</div>
                   <div className="message-content">
                     {msg.attachments && msg.attachments.length > 0 && (
@@ -272,7 +327,17 @@ export default function ChatInterface({
                       <span>Этап 1: Сбор индивидуальных ответов...</span>
                     </div>
                   )}
-                  {msg.stage1 && <Stage1 responses={msg.stage1} />}
+                  {msg.stage1 && (
+                    <div
+                      ref={
+                        isLastExchange ? setSectionRef('stage1') : undefined
+                      }
+                      data-section="stage1"
+                      className="stage-anchor"
+                    >
+                      <Stage1 responses={msg.stage1} />
+                    </div>
+                  )}
 
                   {/* Stage 2 */}
                   {msg.loading?.stage2 && (
@@ -282,11 +347,19 @@ export default function ChatInterface({
                     </div>
                   )}
                   {msg.stage2 && (
-                    <Stage2
-                      rankings={msg.stage2}
-                      labelToModel={msg.metadata?.label_to_model}
-                      aggregateRankings={msg.metadata?.aggregate_rankings}
-                    />
+                    <div
+                      ref={
+                        isLastExchange ? setSectionRef('stage2') : undefined
+                      }
+                      data-section="stage2"
+                      className="stage-anchor"
+                    >
+                      <Stage2
+                        rankings={msg.stage2}
+                        labelToModel={msg.metadata?.label_to_model}
+                        aggregateRankings={msg.metadata?.aggregate_rankings}
+                      />
+                    </div>
                   )}
 
                   {/* Stage 3 */}
@@ -296,11 +369,23 @@ export default function ChatInterface({
                       <span>Этап 3: Финальный синтез...</span>
                     </div>
                   )}
-                  {msg.stage3 && <Stage3 finalResponse={msg.stage3} />}
+                  {msg.stage3 && (
+                    <div
+                      ref={
+                        isLastExchange ? setSectionRef('stage3') : undefined
+                      }
+                      data-section="stage3"
+                      className="stage-anchor"
+                    >
+                      <Stage3 finalResponse={msg.stage3} />
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-          ))
+            </ErrorBoundary>
+            );
+          })
         )}
 
         {isLoading && (

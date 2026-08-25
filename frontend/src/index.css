@@ -31,6 +31,21 @@ body {
 /* Global markdown styling */
 .markdown-content {
   padding: 12px;
+  overflow-wrap: break-word;
+  word-break: break-word;
+  min-width: 0;
+}
+
+/* Широкие таблицы в ответах не раздувают чат — горизонтальный скролл внутри */
+.markdown-content table {
+  display: block;
+  overflow-x: auto;
+  max-width: 100%;
+  border-collapse: collapse;
+}
+
+.markdown-content img {
+  max-width: 100%;
 }
 
 .markdown-content p {
