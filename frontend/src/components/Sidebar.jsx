@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import SettingsModal from './SettingsModal';
 import './Sidebar.css';
 
 function plural(count, forms) {
@@ -24,6 +25,7 @@ export default function Sidebar({
   const [contextMenu, setContextMenu] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editingTitle, setEditingTitle] = useState('');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const editInputRef = useRef(null);
   const sidebarRef = useRef(null);
 
@@ -109,7 +111,16 @@ export default function Sidebar({
   return (
     <div className="sidebar" ref={sidebarRef}>
       <div className="sidebar-header">
-        <h1>LLM Council</h1>
+        <div className="sidebar-title-row">
+          <h1>LLM Council</h1>
+          <button
+            className="settings-btn"
+            title="Настройки совета"
+            onClick={() => setSettingsOpen(true)}
+          >
+            ⚙️
+          </button>
+        </div>
         <button className="new-conversation-btn" onClick={onNewConversation}>
           + Новый диалог
         </button>
@@ -212,6 +223,10 @@ export default function Sidebar({
             🗑️ Удалить
           </button>
         </div>
+      )}
+
+      {settingsOpen && (
+        <SettingsModal onClose={() => setSettingsOpen(false)} />
       )}
     </div>
   );

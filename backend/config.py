@@ -32,3 +32,6 @@ CHAT_COMPLETIONS_URL = OPENAI_COMPATIBLE_URL.rstrip("/") + "/chat/completions"
 
 # Data directory for conversation storage
 DATA_DIR = "data/conversations"
+
+# User settings file (council composition + chairman overrides)
+SETTINGS_FILE = "data/settings.json"

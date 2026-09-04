@@ -1,0 +1,163 @@
+import { useState, useEffect } from 'react';
+import { api } from '../api';
+import './SettingsModal.css';
+
+export default function SettingsModal({ onClose }) {
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [availableModels, setAvailableModels] = useState([]);
+  const [checkedModels, setCheckedModels] = useState(() => new Set());
+  const [chairmanModel, setChairmanModel] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await api.getSettings();
+        if (cancelled) return;
+        setAvailableModels(data.available_models || []);
+        // Чекбокс включён, если модель входит в эффективный состав совета
+        // (переопределение из settings.json, иначе дефолт конфига).
+        setCheckedModels(new Set(data.council_models || []));
+        setChairmanModel(data.chairman_model || '');
+      } catch (e) {
+        if (!cancelled) setLoadError('Не удалось загрузить настройки');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [onClose]);
+
+  const toggleModel = (id) => {
+    setCheckedModels((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleSave = async () => {
+    const council = availableModels.filter((m) => checkedModels.has(m));
+    // На случай, если выбранные модели не из списка прокси (прокси был недоступен)
+    for (const m of checkedModels) {
+      if (!council.includes(m)) council.push(m);
+    }
+    if (council.length === 0) {
+      setSaveError('Выберите хотя бы одну модель для совета');
+      return;
+    }
+    if (!chairmanModel) {
+      setSaveError('Выберите модель Председателя');
+      return;
+    }
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await api.saveSettings({
+        council_models: council,
+        chairman_model: chairmanModel,
+      });
+      onClose();
+    } catch (e) {
+      setSaveError(e.message || 'Не удалось сохранить настройки');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="settings-overlay" onClick={onClose}>
+      <div
+        className="settings-modal"
+        onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Настройки совета"
+      >
+        <div className="settings-header">
+          <h2>Настройки совета</h2>
+          <button className="settings-close" onClick={onClose} title="Закрыть">
+            ×
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="settings-loading">Загрузка…</div>
+        ) : loadError ? (
+          <div className="settings-error">{loadError}</div>
+        ) : (
+          <>
+            <div className="settings-section">
+              <div className="settings-section-title">
+                Модели совета ({checkedModels.size} из {availableModels.length})
+              </div>
+              <div className="settings-model-list">
+                {availableModels.map((id) => (
+                  <label key={id} className="settings-model-item">
+                    <input
+                      type="checkbox"
+                      checked={checkedModels.has(id)}
+                      onChange={() => toggleModel(id)}
+                    />
+                    <span className="settings-model-name">{id}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="settings-section">
+              <div className="settings-section-title">Председатель</div>
+              <select
+                className="settings-chairman-select"
+                value={chairmanModel}
+                onChange={(e) => setChairmanModel(e.target.value)}
+              >
+                {availableModels.map((id) => (
+                  <option key={id} value={id}>
+                    {id}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {saveError && <div className="settings-error">{saveError}</div>}
+
+            <div className="settings-note">
+              Настройки применяются к новым сообщениям.
+            </div>
+
+            <div className="settings-actions">
+              <button
+                className="settings-save-btn"
+                onClick={handleSave}
+                disabled={saving}
+              >
+                {saving ? 'Сохранение…' : 'Сохранить'}
+              </button>
+              <button className="settings-cancel-btn" onClick={onClose}>
+                Отмена
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}

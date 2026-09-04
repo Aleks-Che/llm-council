@@ -11,6 +11,8 @@ ModelKey = Tuple[str, str]  # (provider, model_name)
 
 def model_id(provider: str, model_name: str) -> str:
     """Combine provider and model_name into a single identifier."""
+    if not provider:
+        return model_name
     return f"{provider}/{model_name}"
 
 

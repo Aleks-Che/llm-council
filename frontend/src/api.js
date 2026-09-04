@@ -83,6 +83,42 @@ export const api = {
   },
 
   /**
+   * Get user settings (council composition, chairman, available models).
+   */
+  async getSettings() {
+    const response = await fetch(`${API_BASE}/api/settings`);
+    if (!response.ok) {
+      throw new Error('Failed to get settings');
+    }
+    return response.json();
+  },
+
+  /**
+   * Save user settings.
+   * @param {{council_models: string[], chairman_model: string}} settings
+   */
+  async saveSettings(settings) {
+    const response = await fetch(`${API_BASE}/api/settings`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(settings),
+    });
+    if (!response.ok) {
+      let detail = 'Failed to save settings';
+      try {
+        const data = await response.json();
+        if (data?.detail) detail = data.detail;
+      } catch {
+        // keep generic message
+      }
+      throw new Error(detail);
+    }
+    return response.json();
+  },
+
+  /**
    * Send a message in a conversation.
    */
   async sendMessage(conversationId, content) {

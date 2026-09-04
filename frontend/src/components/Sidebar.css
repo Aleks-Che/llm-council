@@ -13,10 +13,42 @@
   border-bottom: 1px solid #e0e0e0;
 }
 
+.sidebar-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.sidebar-title-row h1 {
+  margin: 0;
+}
+
 .sidebar-header h1 {
   font-size: 18px;
   margin: 0 0 12px 0;
   color: #333;
+}
+
+.settings-btn {
+  background: transparent;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  transition: background 0.2s;
+  /* эмодзи-глиф шестерёнки оптически сидит ниже базовой линии текста —
+     поднимаем кнопку, чтобы она была на одном уровне с заголовком */
+  position: relative;
+  top: -3px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.settings-btn:hover {
+  background: #ececec;
 }
 
 .new-conversation-btn {

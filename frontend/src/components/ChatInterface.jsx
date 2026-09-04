@@ -10,6 +10,8 @@ import './ChatInterface.css';
 
 const MAX_FILE_SIZE = 1024 * 1024; // 1 MB на файл
 const MAX_FILES = 10;
+// Вставка текста длиннее этого порога превращается во вложение .txt
+const PASTE_AS_FILE_THRESHOLD = 2000;
 
 function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
@@ -182,6 +184,49 @@ export default function ChatInterface({
 
   const removeAttachment = (id) => {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
+  };
+
+  // Вставка длинного текста (> 2000 символов): прикрепляем как .txt,
+  // чтобы не раздувать поле ввода. Имя уникализируем: pasted.txt, pasted-2.txt...
+  const handlePaste = (e) => {
+    const text = e.clipboardData?.getData('text/plain');
+    if (!text || text.length <= PASTE_AS_FILE_THRESHOLD) return;
+
+    e.preventDefault();
+    setAttachError(null);
+
+    const size = new Blob([text]).size;
+    if (size > MAX_FILE_SIZE) {
+      setAttachError(
+        `Вставленный текст не прикреплён (${formatSize(size)} — больше 1 MB)`
+      );
+      return;
+    }
+
+    setAttachments((prev) => {
+      if (prev.length >= MAX_FILES) {
+        setAttachError(
+          `Максимум ${MAX_FILES} файлов. Вставленный текст не прикреплён.`
+        );
+        return prev;
+      }
+      const names = new Set(prev.map((a) => a.name));
+      let name = 'pasted.txt';
+      let n = 1;
+      while (names.has(name)) {
+        n += 1;
+        name = `pasted-${n}.txt`;
+      }
+      return [
+        ...prev,
+        {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          name,
+          size,
+          content: text,
+        },
+      ];
+    });
   };
 
   // Drag & drop: счётчик depth, чтобы dragleave на дочерних элементах
@@ -481,10 +526,11 @@ export default function ChatInterface({
             {attachError && <div className="attach-error">{attachError}</div>}
             <textarea
               className="message-input"
-              placeholder="Задайте ваш вопрос... (Enter — отправить, Shift+Enter — новая строка; файлы — скрепкой или drag&drop)"
+              placeholder="Задайте ваш вопрос... (Enter — отправить, Shift+Enter — новая строка; файлы — скрепкой или drag&drop; вставка текста > 2000 символов прикрепит его как .txt)"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
               disabled={isLoading}
               rows={3}
             />

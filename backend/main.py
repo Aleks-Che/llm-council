@@ -9,7 +9,11 @@ import uuid
 import json
 import asyncio
 
-from . import storage
+import httpx
+
+from . import storage, settings_store
+from .client import model_id
+from .config import COUNCIL_MODELS, CHAIRMAN_MODEL, TITLE_MODEL, OPENAI_COMPATIBLE_URL, OPENAI_COMPATIBLE_KEY
 from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
 
 app = FastAPI(title="LLM Council API")
@@ -55,10 +59,76 @@ class UpdateConversationRequest(BaseModel):
     title: str
 
 
+class SettingsRequest(BaseModel):
+    """Request to save user settings (council composition + chairman)."""
+    council_models: List[str]
+    chairman_model: str
+
+
 @app.get("/")
 async def root():
     """Health check endpoint."""
     return {"status": "ok", "service": "LLM Council API"}
+
+
+async def fetch_available_models() -> List[str]:
+    """
+    Fetch the list of model ids exposed by the OpenAI-compatible proxy.
+    Returns an empty list if the proxy is unreachable.
+    """
+    url = OPENAI_COMPATIBLE_URL.rstrip("/") + "/models"
+    headers = {}
+    if OPENAI_COMPATIBLE_KEY:
+        headers["Authorization"] = f"Bearer {OPENAI_COMPATIBLE_KEY}"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as http:
+            response = await http.get(url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+            return [m["id"] for m in data.get("data", []) if m.get("id")]
+    except Exception as e:
+        print(f"Failed to fetch models from proxy: {e}")
+        return []
+
+
+@app.get("/api/settings")
+async def get_settings():
+    """
+    Get current settings plus the list of models available for selection.
+
+    Checkbox logic for the UI: a model is checked if it is in the effective
+    council list (settings override; config defaults otherwise).
+    """
+    settings = settings_store.get_settings()
+    defaults = settings_store.default_settings()
+
+    proxy_models = await fetch_available_models()
+
+    # Union: proxy models + everything referenced by config/settings,
+    # so the UI stays usable even if the proxy is down.
+    known = {
+        model_id(p, m) for p, m in (*COUNCIL_MODELS, CHAIRMAN_MODEL, TITLE_MODEL)
+    }
+    available = sorted(
+        set(proxy_models) | known | set(settings["council_models"]) | {settings["chairman_model"]}
+    )
+
+    return {
+        "available_models": available,
+        "council_models": settings["council_models"],
+        "chairman_model": settings["chairman_model"],
+        "defaults": defaults,
+    }
+
+
+@app.post("/api/settings")
+async def save_settings(request: SettingsRequest):
+    """Save user settings (council composition + chairman model)."""
+    try:
+        saved = settings_store.save_settings(request.council_models, request.chairman_model)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "ok", **saved}
 
 
 @app.get("/api/conversations", response_model=List[ConversationMetadata])
