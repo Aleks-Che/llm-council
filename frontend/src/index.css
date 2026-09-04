@@ -42,6 +42,25 @@ body {
   overflow-x: auto;
   max-width: 100%;
   border-collapse: collapse;
+  margin: 0 0 12px 0;
+  font-size: 0.95em;
+}
+
+.markdown-content th,
+.markdown-content td {
+  border: 1px solid #ddd;
+  padding: 6px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-content th {
+  background: #f0f0f0;
+  font-weight: 600;
+}
+
+.markdown-content tr:nth-child(even) td {
+  background: #fafafa;
 }
 
 .markdown-content img {

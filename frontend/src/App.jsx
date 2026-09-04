@@ -15,7 +15,6 @@ function App() {
   // и запускать несколько диалогов одновременно.
   const [activeRuns, setActiveRuns] = useState({});
   // Навигация по зонам ответа: user / stage1 / stage2 / stage3.
-  // По умолчанию — stage3 (автопрокрутка вниз).
   const [activeSection, setActiveSection] = useState('stage3');
   const chatScrollRef = useRef(null);
 
@@ -65,9 +64,22 @@ function App() {
     }
   };
 
+  // Последний доступный этап диалога — к нему скроллим при открытии.
+  const getLastAvailableSection = (conv) => {
+    const last = conv?.messages?.[conv.messages.length - 1];
+    if (last?.role === 'assistant') {
+      if (last.stage3) return 'stage3';
+      if (last.stage2) return 'stage2';
+      if (last.stage1) return 'stage1';
+    }
+    return 'user';
+  };
+
   const handleSelectConversation = (id) => {
     setCurrentConversationId(id);
-    setActiveSection('stage3'); // при открытии диалога навигация на финальный этап
+    // Подсветка навигации соответствует месту скролла (последний доступный этап)
+    const conv = activeRuns[id] ?? convCache[id];
+    setActiveSection(conv ? getLastAvailableSection(conv) : 'stage3');
   };
 
   const handleRenameConversation = async (id, newTitle) => {

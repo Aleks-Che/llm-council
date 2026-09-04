@@ -1,4 +1,5 @@
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import CopyButton from './CopyButton';
 import './Stage3.css';
 
@@ -20,7 +21,7 @@ export default function Stage3({ finalResponse }) {
           Председатель: {model.split('/')[1] || model}
         </div>
         <div className="final-text markdown-content">
-          <ReactMarkdown>{responseText}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{responseText}</ReactMarkdown>
         </div>
       </div>
     </div>

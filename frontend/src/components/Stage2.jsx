@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import CopyButton from './CopyButton';
 import './Stage2.css';
 
@@ -55,7 +56,7 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
           <CopyButton text={rankingText} />
         </div>
         <div className="ranking-content markdown-content">
-          <ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>
             {rankingText}
           </ReactMarkdown>
         </div>

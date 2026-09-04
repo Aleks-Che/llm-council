@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import CopyButton from './CopyButton';
 import './Stage1.css';
 
@@ -33,7 +34,7 @@ export default function Stage1({ responses }) {
           <CopyButton text={String(responses[tab]?.response ?? '')} />
         </div>
         <div className="response-text markdown-content">
-          <ReactMarkdown>{String(responses[tab]?.response ?? '')}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{String(responses[tab]?.response ?? '')}</ReactMarkdown>
         </div>
       </div>
     </div>

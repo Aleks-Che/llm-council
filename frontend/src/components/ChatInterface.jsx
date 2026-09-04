@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import Stage1 from './Stage1';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
@@ -53,13 +54,45 @@ export default function ChatInterface({
   const sectionRefs = useRef({});
   const fileInputRef = useRef(null);
   const dragDepthRef = useRef(0);
+  const prevConversationIdRef = useRef(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  // Скролл к началу последнего доступного этапа последнего ответа
+  const scrollToLastAvailableStage = () => {
+    const messages = conversation?.messages ?? [];
+    const last = messages[messages.length - 1];
+    let target = 'user';
+    if (last?.role === 'assistant') {
+      if (last.stage3) target = 'stage3';
+      else if (last.stage2) target = 'stage2';
+      else if (last.stage1) target = 'stage1';
+    }
+    const el = sectionRefs.current[target];
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } else {
+      scrollToBottom();
+    }
+  };
+
+  // При смене диалога — скролл к началу последнего доступного этапа;
+  // при обновлениях того же диалога (новые сообщения, стриминг) — вниз.
   useEffect(() => {
-    scrollToBottom();
+    if (!conversation) {
+      prevConversationIdRef.current = null;
+      return;
+    }
+    const isNewConversation = conversation.id !== prevConversationIdRef.current;
+    prevConversationIdRef.current = conversation.id;
+    if (isNewConversation) {
+      scrollToLastAvailableStage();
+    } else {
+      scrollToBottom();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- реагируем только на смену объекта диалога
   }, [conversation]);
 
   // Навигация: App вызывает scrollApiRef.current(sectionId) для скролла к зоне
@@ -281,7 +314,7 @@ export default function ChatInterface({
                       </div>
                     )}
                     <div className="markdown-content">
-                      <ReactMarkdown>{msg.content}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
                     </div>
                   </div>
                 </div>
