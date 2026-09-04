@@ -1,0 +1,26 @@
+.copy-button {
+  padding: 4px 12px;
+  background: #ffffff;
+  border: 1px solid #d0d0d0;
+  border-radius: 6px;
+  color: #666;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: color 0.2s, border-color 0.2s, background 0.2s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.copy-button:hover {
+  color: #4a90e2;
+  border-color: #4a90e2;
+  background: #f0f7ff;
+}
+
+.copy-button.copied {
+  color: #2e7d52;
+  border-color: #4caf7d;
+  background: #eef9f0;
+}

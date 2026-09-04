@@ -64,6 +64,12 @@
   white-space: pre-wrap;
 }
 
+/* Кнопка «Копировать» справа сверху; текст сообщения обтекает её */
+.user-message-copy {
+  float: right;
+  margin: 0 0 6px 10px;
+}
+
 .loading-indicator {
   display: flex;
   align-items: center;

@@ -3,6 +3,18 @@
   border-color: #c8e6c8;
 }
 
+.stage3 .stage-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.stage3 .stage-header .stage-title {
+  margin: 0;
+}
+
 .final-response {
   background: #ffffff;
   padding: 20px;

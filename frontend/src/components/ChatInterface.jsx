@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import Stage1 from './Stage1';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
+import CopyButton from './CopyButton';
 import ErrorBoundary from './ErrorBoundary';
 import './ChatInterface.css';
 
@@ -263,6 +264,10 @@ export default function ChatInterface({
                 >
                   <div className="message-label">Вы</div>
                   <div className="message-content">
+                    <CopyButton
+                      className="user-message-copy"
+                      text={msg.content}
+                    />
                     {msg.attachments && msg.attachments.length > 0 && (
                       <div className="message-attachments">
                         {msg.attachments.map((a, i) => (

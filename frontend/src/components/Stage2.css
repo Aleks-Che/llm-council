@@ -111,6 +111,18 @@
   margin-bottom: 20px;
 }
 
+.stage2 .tab-content-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.stage2 .tab-content-header .ranking-model {
+  margin-bottom: 0;
+}
+
 .ranking-model {
   color: #888;
   font-size: 12px;

@@ -52,6 +52,18 @@
   border: 1px solid #e0e0e0;
 }
 
+.tab-content-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.tab-content-header .model-name {
+  margin-bottom: 0;
+}
+
 .model-name {
   color: #888;
   font-size: 12px;

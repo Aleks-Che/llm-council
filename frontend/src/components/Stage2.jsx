@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import CopyButton from './CopyButton';
 import './Stage2.css';
 
 function deAnonymizeText(text, labelToModel) {
@@ -21,6 +22,9 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
     return null;
   }
 
+  const tab = Math.min(activeTab, rankings.length - 1);
+  const rankingText = deAnonymizeText(rankings[tab].ranking, labelToModel);
+
   return (
     <div className="stage stage2">
       <h3 className="stage-title">Этап 2: Взаимные оценки</h3>
@@ -35,7 +39,7 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
         {rankings.map((rank, index) => (
           <button
             key={index}
-            className={`tab ${activeTab === index ? 'active' : ''}`}
+            className={`tab ${tab === index ? 'active' : ''}`}
             onClick={() => setActiveTab(index)}
           >
             {rank.model.split('/')[1] || rank.model}
@@ -44,21 +48,24 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
       </div>
 
       <div className="tab-content">
-        <div className="ranking-model">
-          {rankings[activeTab].model}
+        <div className="tab-content-header">
+          <div className="ranking-model">
+            {rankings[tab].model}
+          </div>
+          <CopyButton text={rankingText} />
         </div>
         <div className="ranking-content markdown-content">
           <ReactMarkdown>
-            {deAnonymizeText(rankings[activeTab].ranking, labelToModel)}
+            {rankingText}
           </ReactMarkdown>
         </div>
 
-        {rankings[activeTab].parsed_ranking &&
-         rankings[activeTab].parsed_ranking.length > 0 && (
+        {rankings[tab].parsed_ranking &&
+         rankings[tab].parsed_ranking.length > 0 && (
           <div className="parsed-ranking">
             <strong>Извлечённый рейтинг:</strong>
             <ol>
-              {rankings[activeTab].parsed_ranking.map((label, i) => (
+              {rankings[tab].parsed_ranking.map((label, i) => (
                 <li key={i}>
                   {labelToModel && labelToModel[label]
                     ? labelToModel[label].split('/')[1] || labelToModel[label]
