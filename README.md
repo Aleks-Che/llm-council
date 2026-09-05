@@ -1,91 +1,160 @@
-# LLM Council
+# LLM Council — Совет LLM
 
-![llmcouncil](header.jpg)
+![LLM Council](header.jpg)
 
-The idea of this repo is that instead of asking a question to your favorite LLM provider (e.g. OpenAI GPT 5.1, Google Gemini 3.0 Pro, Anthropic Claude Sonnet 4.5, xAI Grok 4, eg.c), you can group them into your "LLM Council". This repo is a simple, local web app that essentially looks like ChatGPT except it uses OpenRouter to send your query to multiple LLMs, it then asks them to review and rank each other's work, and finally a Chairman LLM produces the final response.
+Доработанная версия [LLM Council Андрея Карпатого](https://github.com/karpathy/llm-council): несколько языковых моделей независимо отвечают на вопрос, оценивают ответы друг друга, а модель-председатель собирает итоговый ответ.
 
-In a bit more detail, here is what happens when you submit a query:
+Интеграция с OpenRouter полностью удалена. Все запросы к LLM — ответы, взаимная оценка, итоговый синтез, исследование и генерация заголовков — идут через локальный **OpenAI-совместимый прокси**.
 
-1. **Stage 1: First opinions**. The user query is given to all LLMs individually, and the responses are collected. The individual responses are shown in a "tab view", so that the user can inspect them all one by one.
-2. **Stage 2: Review**. Each individual LLM is given the responses of the other LLMs. Under the hood, the LLM identities are anonymized so that the LLM can't play favorites when judging their outputs. The LLM is asked to rank them in accuracy and insight.
-3. **Stage 3: Final response**. The designated Chairman of the LLM Council takes all of the model's responses and compiles them into a single final answer that is presented to the user.
+## Что добавлено
 
-## Vibe Code Alert
+- **Авторизация и несколько пользователей.** Вход по логину и паролю, роли пользователя и администратора, управление учётными записями. У каждого пользователя свои диалоги и настройки.
+- **Удобная навигация.** История диалогов, переименование и удаление через контекстное меню, переходы к запросу, источникам и каждому этапу совета из боковой панели.
+- **Копирование в буфер обмена.** Кнопки копирования ответов моделей, оценок и итогового ответа.
+- **Рендеринг Markdown.** Поддержка таблиц, списков задач, ссылок, цитат и блоков кода через `react-markdown` и `remark-gfm`.
+- **Поиск перед запуском совета.** Отдельная модель планирует исследование, а Tavily ищет и извлекает страницы. Совет получает общую справку с выдержками и ссылками; ход поиска и сохранённые тексты доступны в интерфейсе.
+- **Гибкие настройки моделей.** Выбор состава совета, председателя и модели исследования в интерфейсе, загрузка списка моделей из прокси и тестовый запрос к каждой модели. Настройки сохраняются отдельно для каждого пользователя.
+- **Русский интерфейс.** Переведены основные экраны, настройки, этапы обсуждения и сообщения об ошибках.
 
-This project was 99% vibe coded as a fun Saturday hack because I wanted to explore and evaluate a number of LLMs side by side in the process of [reading books together with LLMs](https://x.com/karpathy/status/1990577951671509438). It's nice and useful to see multiple responses side by side, and also the cross-opinions of all LLMs on each other's outputs. I'm not going to support it in any way, it's provided here as is for other people's inspiration and I don't intend to improve it. Code is ephemeral now and libraries are over, ask your LLM to change it in whatever way you like.
+## Как работает совет
 
-## Setup
+1. **Поиск и источники — по желанию.** Если включён «Поиск», сначала выполняется исследование. Собранные материалы передаются на все этапы совета.
+2. **Этап 1: ответы.** Модели параллельно получают вопрос и формируют независимые ответы. Их можно просмотреть по вкладкам.
+3. **Этап 2: взаимная оценка.** Модели оценивают и ранжируют ответы с анонимными обозначениями, без имён авторов. Интерфейс показывает оценки и сводный рейтинг.
+4. **Этап 3: синтез.** Председатель получает ответы и оценки, затем формирует общий итог.
 
-### 1. Install Dependencies
+Прогресс сохраняется на сервере. Во время выполнения можно переключаться между диалогами; кнопка «Остановить» отменяет запуск с сохранением уже полученных результатов.
 
-The project uses [uv](https://docs.astral.sh/uv/) for project management.
+## Установка
 
-**Backend:**
+Требуются **Python 3.10+**, **[uv](https://docs.astral.sh/uv/)**, **Node.js 22.12+** и **npm**. Локальный прокси запускается отдельно; доступные модели и подключение к их провайдерам настраиваются на его стороне.
+
+### 1. Установить зависимости
+
+Из корня проекта:
+
 ```bash
 uv sync
-```
-
-**Frontend:**
-```bash
 cd frontend
 npm install
 cd ..
 ```
 
-### 2. Configure API Key
+### 2. Настроить прокси и первый вход
 
-Create a `.env` file in the project root:
+Создайте `.env` в корне проекта:
 
-```bash
-OPENROUTER_API_KEY=sk-or-v1-...
+```dotenv
+# Базовый адрес API локального прокси, включая /v1
+OPENAI_COMPATIBLE_URL=http://localhost:8001/v1
+
+# Если прокси требует авторизацию, укажите его ключ
+# OPENAI_COMPATIBLE_KEY=your-proxy-key
+
+# Учётная запись администратора при первом запуске
+ADMIN_USERNAME=admin
+# ADMIN_PASSWORD=replace-with-a-long-password
+
+# Общий ключ для поиска (необязательно)
+# TAVILY_API_KEY=your-tavily-key
+
+# Необязательно: собственный секрет подписи токенов
+# JWT_SECRET=replace-with-a-long-random-secret
 ```
 
-Get your API key at [openrouter.ai](https://openrouter.ai/). Make sure to purchase the credits you need, or sign up for automatic top up.
+Прокси должен принимать `POST /v1/chat/completions`. Для автоматического списка моделей используется `GET /v1/models`. Приложение добавляет `/chat/completions` и `/models` к `OPENAI_COMPATIBLE_URL`, поэтому в переменной нужен базовый адрес API. Если задан `OPENAI_COMPATIBLE_KEY`, он передаётся как `Authorization: Bearer …`.
 
-### 3. Configure Models (Optional)
+При первом запуске, если пользователей ещё нет, backend создаёт администратора. Если `ADMIN_PASSWORD` не задан, случайный пароль **один раз выводится в терминал backend**. Можно заранее задать свой пароль длиной от 6 символов. Изменение `ADMIN_USERNAME` или `ADMIN_PASSWORD` в `.env` не меняет существующую учётную запись.
 
-Edit `backend/config.py` to customize the council:
+Если `JWT_SECRET` не задан, секрет генерируется автоматически и сохраняется в `data/.jwt_secret`. После изменения `.env` перезапустите backend.
 
-```python
-COUNCIL_MODELS = [
-    "openai/gpt-5.1",
-    "google/gemini-3-pro-preview",
-    "anthropic/claude-sonnet-4.5",
-    "x-ai/grok-4",
-]
+### 3. Указать адрес backend для фронтенда
 
-CHAIRMAN_MODEL = "google/gemini-3-pro-preview"
+В [frontend/vite.config.js](frontend/vite.config.js) замените адрес backend в **обоих** полях `server.proxy['/api'].target` и `preview.proxy['/api'].target`. Для запуска на одном компьютере:
+
+```js
+target: "http://localhost:8002",
 ```
 
-## Running the Application
+Сейчас в конфигурации указан адрес в локальной сети. Здесь нужен адрес API самого LLM Council; адрес прокси моделей задаётся отдельно в `.env`.
 
-### Optional web research
+### 4. Запустить приложение
 
-Enable **Поиск** below the message field to research the question before the council starts. Configure the research model and your Tavily API key in the settings dialog. A shared server key can also be provided through `TAVILY_API_KEY` in `.env`. The council receives a shared evidence packet with citations; search progress and source text remain inspectable. See the [Russian search guide](docs/ru/search.md) for limits, storage, and tests.
+Терминал 1, из корня проекта:
 
-**Option 1: Use the start script**
-```bash
-./start.sh
-```
-
-**Option 2: Run manually**
-
-Terminal 1 (Backend):
 ```bash
 uv run python -m backend.main
 ```
 
-Terminal 2 (Frontend):
+Терминал 2, из корня проекта:
+
 ```bash
 cd frontend
 npm run dev
 ```
 
-Then open http://localhost:5173 in your browser.
+Откройте **[http://localhost:5173](http://localhost:5173)** и войдите под учётной записью администратора. Через кнопку «Пользователи» в боковой панели можно создавать и редактировать учётные записи, назначать роли и менять пароли.
 
-## Tech Stack
+| Сервис | Адрес при такой настройке |
+| --- | --- |
+| Веб-интерфейс | `http://localhost:5173` |
+| Backend LLM Council | `http://localhost:8002` |
+| API локального прокси моделей | `http://localhost:8001/v1` |
 
-- **Backend:** FastAPI (Python 3.10+), async httpx, OpenRouter API
-- **Frontend:** React + Vite, react-markdown for rendering
-- **Storage:** JSON files in `data/conversations/`
-- **Package Management:** uv for Python, npm for JavaScript
+## Настройки моделей
+
+Откройте **«Настройки совета»** через кнопку ⚙️ в боковой панели:
+
+1. Отметьте модели, которые будут участвовать в совете.
+2. Выберите председателя для итогового ответа.
+3. При необходимости выберите модель исследования и настройте поиск.
+4. Проверьте доступность моделей кнопкой «Тест» и сохраните настройки.
+
+Изменения применяются к новым сообщениям. Если список моделей прокси недоступен, в настройках остаются модели из конфигурации и сохранённых настроек пользователя.
+
+Значения по умолчанию находятся в [backend/config.py](backend/config.py):
+
+- `COUNCIL_MODELS` — состав совета;
+- `CHAIRMAN_MODEL` — председатель;
+- `TITLE_MODEL` — модель для заголовков диалогов; также используется как начальное значение модели исследования.
+
+В конфигурации модель задаётся кортежем `(provider, model_name)`, а в запросах к прокси — строкой `provider/model_name`. Например, `("moonshot", "kimi-k3")` превращается в `moonshot/kimi-k3`. Для идентификатора без префикса используйте пустого провайдера: `("", "my-model")`. Имена должны совпадать с идентификаторами, настроенными в вашем прокси.
+
+После изменения `backend/config.py` перезапустите backend. Персональные настройки состава совета и председателя имеют приоритет над значениями по умолчанию.
+
+## Поиск перед ответом
+
+В настройках, в разделе **«Поиск в интернете»**, выберите модель исследования и добавьте личный ключ [Tavily](https://app.tavily.com). Вместо личного ключа можно использовать общий `TAVILY_API_KEY` из `.env`; личный ключ имеет приоритет.
+
+Включите **«Поиск»** под полем ввода перед отправкой вопроса. По умолчанию он выключен. Запросы к модели исследования идут через тот же локальный прокси, а поиск и извлечение страниц — через Tavily API.
+
+По умолчанию исследование ограничено двумя проходами, шестью поисковыми запросами, десятью страницами и 180 секундами. Лимиты можно менять в интерфейсе. План, запросы, источники, выдержки и найденные пробелы отображаются в блоке «Поиск и источники».
+
+Подробности о лимитах, обработке сбоев и хранении материалов — в [руководстве по поиску](docs/ru/search.md).
+
+## Хранение данных
+
+Данные хранятся локально в JSON-файлах, отдельная база данных не требуется:
+
+```text
+data/
+├── users.json                 # Учётные записи, роли и bcrypt-хеши паролей
+├── .jwt_secret                # Автоматически созданный секрет JWT
+└── users/
+    └── <user_id>/
+        ├── settings.json      # Персональные настройки и личный ключ Tavily
+        ├── conversations/     # Диалоги и результаты этапов
+        └── research/          # Сохранённые тексты источников
+```
+
+При обновлении со старой версии диалоги из `data/conversations/` и настройки из `data/settings.json` автоматически переносятся первому администратору. Миграция выполняется один раз и отмечается файлом `data/.migrated`.
+
+Каталог `data/` и файл `.env` исключены из Git.
+
+## Стек
+
+- **Backend:** FastAPI, Python, httpx, Pydantic, bcrypt, PyJWT.
+- **Frontend:** React, Vite, react-markdown, remark-gfm.
+- **LLM:** локальный OpenAI-совместимый прокси.
+- **Веб-поиск:** Tavily Search и Extract.
+- **Зависимости:** uv для Python, npm для JavaScript.
