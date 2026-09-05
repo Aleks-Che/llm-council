@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
+
 import SettingsModal from './SettingsModal';
+
 import './Sidebar.css';
 
 function plural(count, forms) {
@@ -112,7 +114,7 @@ export default function Sidebar({
     <div className="sidebar" ref={sidebarRef}>
       <div className="sidebar-header">
         <div className="sidebar-title-row">
-          <h1>LLM Council</h1>
+          <h1>LLM Совет</h1>
           <button
             className="settings-btn"
             title="Настройки совета"
@@ -160,8 +162,21 @@ export default function Sidebar({
                       {conv.title || 'Новый диалог'}
                     </div>
                     <div className="conversation-meta">
-                      {conv.message_count}{' '}
-                      {plural(conv.message_count, ['сообщение', 'сообщения', 'сообщений'])}
+                      {conv.is_running ? (
+                        <span className="conversation-running">
+                          <span className="conversation-running-spinner" />
+                          Выполняется...
+                        </span>
+                      ) : (
+                        <>
+                          {conv.message_count}{' '}
+                          {plural(conv.message_count, [
+                            'сообщение',
+                            'сообщения',
+                            'сообщений',
+                          ])}
+                        </>
+                      )}
                     </div>
                     {conv.id === currentConversationId && navVisible && (
                       <div

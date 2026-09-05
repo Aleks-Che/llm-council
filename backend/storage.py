@@ -127,20 +127,13 @@ def add_user_message(conversation_id: str, content: str):
     save_conversation(conversation)
 
 
-def add_assistant_message(
-    conversation_id: str,
-    stage1: List[Dict[str, Any]],
-    stage2: List[Dict[str, Any]],
-    stage3: Dict[str, Any]
-):
+def add_assistant_placeholder(conversation_id: str):
     """
-    Add an assistant message with all 3 stages to a conversation.
+    Add an empty assistant message that a background council run will fill
+    in progressively (stage results are saved as each stage completes).
 
     Args:
         conversation_id: Conversation identifier
-        stage1: List of individual model responses
-        stage2: List of model rankings
-        stage3: Final synthesized response
     """
     conversation = get_conversation(conversation_id)
     if conversation is None:
@@ -148,12 +141,70 @@ def add_assistant_message(
 
     conversation["messages"].append({
         "role": "assistant",
-        "stage1": stage1,
-        "stage2": stage2,
-        "stage3": stage3
+        "stage1": None,
+        "stage2": None,
+        "stage3": None,
+        "metadata": None,
+        "status": "running",
+        "current_stage": "stage1",
+        "error": None
     })
 
     save_conversation(conversation)
+
+
+def update_last_assistant_message(conversation_id: str, **fields):
+    """
+    Update fields of the most recent assistant message (incremental
+    persistence of council progress).
+
+    Args:
+        conversation_id: Conversation identifier
+        **fields: Fields to set (stage1/stage2/stage3/metadata/status/
+            current_stage/error)
+    """
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    for message in reversed(conversation["messages"]):
+        if message.get("role") == "assistant":
+            message.update(fields)
+            save_conversation(conversation)
+            return
+
+    raise ValueError(f"Conversation {conversation_id} has no assistant message")
+
+
+def mark_interrupted_runs():
+    """
+    Mark assistant messages still in 'running' state as 'interrupted'.
+
+    Called on server startup: a persisted 'running' status means the server
+    was restarted while a background run was in progress.
+    """
+    ensure_data_dir()
+
+    for filename in os.listdir(DATA_DIR):
+        if not filename.endswith('.json'):
+            continue
+        path = os.path.join(DATA_DIR, filename)
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        messages = data.get("messages", [])
+        if not messages:
+            continue
+        last = messages[-1]
+        if last.get("role") == "assistant" and last.get("status") == "running":
+            last["status"] = "interrupted"
+            last["current_stage"] = None
+            last["error"] = "Сервер был перезапущен во время выполнения."
+            with open(path, 'w') as f:
+                json.dump(data, f, indent=2)
 
 
 def update_conversation_title(conversation_id: str, title: str):

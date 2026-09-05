@@ -119,7 +119,28 @@ export const api = {
   },
 
   /**
-   * Send a message in a conversation.
+   * Run a short connectivity test for a model.
+   * @param {string} modelId
+   * @returns {Promise<{ok: boolean, duration_s: number}>}
+   */
+  async testModel(modelId) {
+    const response = await fetch(`${API_BASE}/api/settings/test-model`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ model: modelId }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to test model');
+    }
+    return response.json();
+  },
+
+  /**
+   * Send a message: the backend starts the council run in the background
+   * and returns immediately. Progress is observed by polling the
+   * conversation.
    */
   async sendMessage(conversationId, content) {
     const response = await fetch(
@@ -136,52 +157,5 @@ export const api = {
       throw new Error('Failed to send message');
     }
     return response.json();
-  },
-
-  /**
-   * Send a message and receive streaming updates.
-   * @param {string} conversationId - The conversation ID
-   * @param {string} content - The message content
-   * @param {function} onEvent - Callback function for each event: (eventType, data) => void
-   * @returns {Promise<void>}
-   */
-  async sendMessageStream(conversationId, content, onEvent) {
-    const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/message/stream`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ content }),
-      }
-    );
-
-    if (!response.ok) {
-      throw new Error('Failed to send message');
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value);
-      const lines = chunk.split('\n');
-
-      for (const line of lines) {
-        if (line.startsWith('data: ')) {
-          const data = line.slice(6);
-          try {
-            const event = JSON.parse(data);
-            onEvent(event.type, event);
-          } catch (e) {
-            console.error('Failed to parse SSE event:', e);
-          }
-        }
-      }
-    }
   },
 };

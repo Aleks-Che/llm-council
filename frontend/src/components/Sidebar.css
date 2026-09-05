@@ -110,6 +110,28 @@
   font-size: 12px;
 }
 
+.conversation-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #2f6bb3;
+}
+
+.conversation-running-spinner {
+  width: 10px;
+  height: 10px;
+  border: 2px solid #c9dcf2;
+  border-top-color: #4a90e2;
+  border-radius: 50%;
+  animation: sidebar-spin 0.8s linear infinite;
+}
+
+@keyframes sidebar-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .conversation-item.editing {
   background: #fff;
   border: 1px solid #4a90e2;

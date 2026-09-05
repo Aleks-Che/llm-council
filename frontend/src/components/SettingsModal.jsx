@@ -10,6 +10,8 @@ export default function SettingsModal({ onClose }) {
   const [chairmanModel, setChairmanModel] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
+  // Состояние теста по каждой модели: 'testing' | 'ok' | 'fail' (+ длительность)
+  const [testStates, setTestStates] = useState({});
 
   useEffect(() => {
     let cancelled = false;
@@ -22,7 +24,7 @@ export default function SettingsModal({ onClose }) {
         // (переопределение из settings.json, иначе дефолт конфига).
         setCheckedModels(new Set(data.council_models || []));
         setChairmanModel(data.chairman_model || '');
-      } catch (e) {
+      } catch {
         if (!cancelled) setLoadError('Не удалось загрузить настройки');
       } finally {
         if (!cancelled) setLoading(false);
@@ -51,6 +53,27 @@ export default function SettingsModal({ onClose }) {
       }
       return next;
     });
+  };
+
+  const handleTestModel = async (e, id) => {
+    // Кнопка внутри <label> - не даём клику переключить чекбокс
+    e.preventDefault();
+    e.stopPropagation();
+    if (testStates[id]?.status === 'testing') return;
+
+    setTestStates((prev) => ({ ...prev, [id]: { status: 'testing' } }));
+    try {
+      const result = await api.testModel(id);
+      setTestStates((prev) => ({
+        ...prev,
+        [id]: {
+          status: result.ok ? 'ok' : 'fail',
+          duration: result.duration_s,
+        },
+      }));
+    } catch {
+      setTestStates((prev) => ({ ...prev, [id]: { status: 'fail' } }));
+    }
   };
 
   const handleSave = async () => {
@@ -109,16 +132,43 @@ export default function SettingsModal({ onClose }) {
                 Модели совета ({checkedModels.size} из {availableModels.length})
               </div>
               <div className="settings-model-list">
-                {availableModels.map((id) => (
-                  <label key={id} className="settings-model-item">
-                    <input
-                      type="checkbox"
-                      checked={checkedModels.has(id)}
-                      onChange={() => toggleModel(id)}
-                    />
-                    <span className="settings-model-name">{id}</span>
-                  </label>
-                ))}
+                {availableModels.map((id) => {
+                  const test = testStates[id];
+                  const status = test?.status;
+                  return (
+                    <label key={id} className="settings-model-item">
+                      <input
+                        type="checkbox"
+                        checked={checkedModels.has(id)}
+                        onChange={() => toggleModel(id)}
+                      />
+                      <span className="settings-model-name">{id}</span>
+                      <button
+                        type="button"
+                        className={`settings-model-test-btn${
+                          status ? ` tested ${status}` : ''
+                        }`}
+                        title={
+                          status === 'ok'
+                            ? `Ответ за ${test.duration} с`
+                            : status === 'fail'
+                              ? 'Модель не ответила или вернула пустой ответ'
+                              : 'Отправить тестовый запрос'
+                        }
+                        disabled={status === 'testing'}
+                        onClick={(e) => handleTestModel(e, id)}
+                      >
+                        {status === 'testing'
+                          ? '…'
+                          : status === 'ok'
+                            ? 'Успех!'
+                            : status === 'fail'
+                              ? 'Ошибка'
+                              : 'Тест'}
+                      </button>
+                    </label>
+                  );
+                })}
               </div>
             </div>
 

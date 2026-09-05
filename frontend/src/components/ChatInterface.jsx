@@ -19,6 +19,54 @@ function formatSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+// Markdown-файлы рендерим как разметку, а не как код
+const isMarkdownFile = (name) => /\.(md|markdown)$/i.test(String(name));
+
+// В старых сохранённых сообщениях все вложения записаны с ~~~~text-фенсом.
+// Перед рендером помечаем блок как markdown, если имя файла из заголовка
+// вложения (формат создаётся в buildContent) — markdown.
+function normalizeMarkdownFences(content) {
+  return String(content ?? '').replace(
+    /(\*\*📎 [^*]+\.(?:md|markdown)\*\*[^\n]*\n+)~~~~text(?=\n)/gi,
+    '$1~~~~markdown'
+  );
+}
+
+// Вложенный рендер markdown-вложения внутри сообщения пользователя
+function MarkdownAttachment({ text }) {
+  return (
+    <div className="markdown-attachment">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    </div>
+  );
+}
+
+// Код-блоки с языком "markdown" (так помечаются .md-вложения в buildContent)
+// отображаем отрендеренной разметкой; остальные блоки — как обычный код.
+const userMessageComponents = {
+  pre({ node, children, ...props }) {
+    const codeEl = node?.children?.find(
+      (c) => c.type === 'element' && c.tagName === 'code'
+    );
+    const cls = codeEl?.properties?.className || [];
+    if (cls.includes('language-markdown')) {
+      // без <pre>, иначе унаследуется white-space: pre и фон код-блока
+      return <>{children}</>;
+    }
+    return <pre {...props}>{children}</pre>;
+  },
+  code({ node: _node, className, children, ...props }) {
+    if (className === 'language-markdown') {
+      return <MarkdownAttachment text={String(children).replace(/\n$/, '')} />;
+    }
+    return (
+      <code className={className} {...props}>
+        {children}
+      </code>
+    );
+  },
+};
+
 // Читаем файл как текст. Сначала UTF-8; если видим U+FFFD (битая кодировка),
 // повторно читаем как windows-1251 — частый случай для русских .txt.
 function readFileAsText(file) {
@@ -40,6 +88,37 @@ function readFileAsText(file) {
   });
 }
 
+// Какой этап сейчас генерируется — по статусу запуска, сохранённому бэкендом
+// (переживает перезагрузку страницы).
+function isStageLoading(msg, stage) {
+  return msg?.status === 'running' && msg?.current_stage === stage && !msg?.[stage];
+}
+
+function messageLoading(msg) {
+  return {
+    stage1: isStageLoading(msg, 'stage1'),
+    stage2: isStageLoading(msg, 'stage2'),
+    stage3: isStageLoading(msg, 'stage3'),
+  };
+}
+
+// Отпечаток значимых для скролла изменений: новые сообщения, статус/этап
+// запуска, появление контента этапов. Поллинг без изменений даёт ту же
+// сигнатуру и не дёргает автоскролл.
+function conversationSignature(conversation) {
+  const messages = conversation?.messages ?? [];
+  const last = messages[messages.length - 1];
+  return [
+    messages.length,
+    last?.status ?? '',
+    last?.current_stage ?? '',
+    Boolean(last?.stage1),
+    Boolean(last?.stage2),
+    Boolean(last?.stage3),
+    last?.error ?? '',
+  ].join('|');
+}
+
 export default function ChatInterface({
   conversation,
   onSendMessage,
@@ -57,6 +136,7 @@ export default function ChatInterface({
   const fileInputRef = useRef(null);
   const dragDepthRef = useRef(0);
   const prevConversationIdRef = useRef(null);
+  const prevSignatureRef = useRef(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -80,20 +160,34 @@ export default function ChatInterface({
     }
   };
 
-  // При смене диалога — скролл к началу последнего доступного этапа;
-  // при обновлениях того же диалога (новые сообщения, стриминг) — вниз.
+  // При смене диалога — скролл к началу последнего доступного этапа.
+  // При обновлениях того же диалога (завершение этапа, новое сообщение) —
+  // вниз, но только если пользователь и так у низа: чтение истории выше
+  // автоскролл не сбрасывает. Обновления без реальных изменений (поллинг)
+  // дают прежнюю сигнатуру и вообще не трогают скролл.
   useEffect(() => {
     if (!conversation) {
       prevConversationIdRef.current = null;
+      prevSignatureRef.current = null;
       return;
     }
-    const isNewConversation = conversation.id !== prevConversationIdRef.current;
+    const signature = conversationSignature(conversation);
+    const isNewConversation =
+      conversation.id !== prevConversationIdRef.current;
     prevConversationIdRef.current = conversation.id;
     if (isNewConversation) {
+      prevSignatureRef.current = signature;
       scrollToLastAvailableStage();
-    } else {
-      scrollToBottom();
+      return;
     }
+    if (signature === prevSignatureRef.current) return;
+    prevSignatureRef.current = signature;
+    const container = messagesContainerRef.current;
+    const nearBottom =
+      !container ||
+      container.scrollHeight - container.scrollTop - container.clientHeight <
+        150;
+    if (nearBottom) scrollToBottom();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- реагируем только на смену объекта диалога
   }, [conversation]);
 
@@ -259,10 +353,11 @@ export default function ChatInterface({
   const buildContent = () => {
     let content = input.trim();
     if (attachments.length > 0) {
-      const parts = attachments.map(
-        (a) =>
-          `**📎 ${a.name}** (${formatSize(a.size)}):\n\n~~~~text\n${a.content}\n~~~~`
-      );
+      const parts = attachments.map((a) => {
+        // .md-файлы помечаем языком markdown: в UI они отрендерятся разметкой
+        const lang = isMarkdownFile(a.name) ? 'markdown' : 'text';
+        return `**📎 ${a.name}** (${formatSize(a.size)}):\n\n~~~~${lang}\n${a.content}\n~~~~`;
+      });
       content += `${content ? '\n\n' : ''}---\n\n**Прикреплённые файлы:**\n\n${parts.join('\n\n')}`;
     }
     return content;
@@ -327,6 +422,8 @@ export default function ChatInterface({
           conversation.messages.map((msg, index) => {
             const isLastExchange =
               index >= conversation.messages.length - 2;
+            const loading =
+              msg.role === 'assistant' ? messageLoading(msg) : null;
             const setSectionRef = (id) => (el) => {
               if (el) sectionRefs.current[id] = el;
               else delete sectionRefs.current[id];
@@ -359,7 +456,12 @@ export default function ChatInterface({
                       </div>
                     )}
                     <div className="markdown-content">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={userMessageComponents}
+                      >
+                        {normalizeMarkdownFences(msg.content)}
+                      </ReactMarkdown>
                     </div>
                   </div>
                 </div>
@@ -371,9 +473,9 @@ export default function ChatInterface({
                   {(msg.stage1 ||
                     msg.stage2 ||
                     msg.stage3 ||
-                    msg.loading?.stage1 ||
-                    msg.loading?.stage2 ||
-                    msg.loading?.stage3) && (
+                    loading.stage1 ||
+                    loading.stage2 ||
+                    loading.stage3) && (
                     <div className="stage-progress">
                       {[
                         { key: 'stage1', label: 'Этап 1: Ответы моделей' },
@@ -381,7 +483,7 @@ export default function ChatInterface({
                         { key: 'stage3', label: 'Этап 3: Финальный синтез' },
                       ].map((s) => {
                         const done = Boolean(msg[s.key]);
-                        const running = Boolean(msg.loading?.[s.key]);
+                        const running = Boolean(loading[s.key]);
                         return (
                           <span
                             key={s.key}
@@ -404,7 +506,7 @@ export default function ChatInterface({
                   )}
 
                   {/* Stage 1 */}
-                  {msg.loading?.stage1 && (
+                  {loading.stage1 && (
                     <div className="stage-loading">
                       <div className="spinner"></div>
                       <span>Этап 1: Сбор индивидуальных ответов...</span>
@@ -423,7 +525,7 @@ export default function ChatInterface({
                   )}
 
                   {/* Stage 2 */}
-                  {msg.loading?.stage2 && (
+                  {loading.stage2 && (
                     <div className="stage-loading">
                       <div className="spinner"></div>
                       <span>Этап 2: Взаимное ранжирование...</span>
@@ -446,7 +548,7 @@ export default function ChatInterface({
                   )}
 
                   {/* Stage 3 */}
-                  {msg.loading?.stage3 && (
+                  {loading.stage3 && (
                     <div className="stage-loading">
                       <div className="spinner"></div>
                       <span>Этап 3: Финальный синтез...</span>
@@ -461,6 +563,16 @@ export default function ChatInterface({
                       className="stage-anchor"
                     >
                       <Stage3 finalResponse={msg.stage3} />
+                    </div>
+                  )}
+
+                  {/* Run failed or was interrupted by a server restart */}
+                  {(msg.status === 'error' || msg.status === 'interrupted') && (
+                    <div className="stage-error">
+                      {msg.status === 'interrupted'
+                        ? '⚠️ Запуск был прерван перезапуском сервера.'
+                        : '⚠️ Ошибка при выполнении запуска.'}
+                      {msg.error ? ` ${msg.error}` : ''}
                     </div>
                   )}
                 </div>
@@ -479,11 +591,11 @@ export default function ChatInterface({
                 const last =
                   conversation.messages[conversation.messages.length - 1];
                 if (last?.role === 'assistant') {
-                  if (last.loading?.stage1)
+                  if (isStageLoading(last, 'stage1'))
                     return 'Этап 1: Сбор индивидуальных ответов...';
-                  if (last.loading?.stage2)
+                  if (isStageLoading(last, 'stage2'))
                     return 'Этап 2: Взаимное ранжирование...';
-                  if (last.loading?.stage3)
+                  if (isStageLoading(last, 'stage3'))
                     return 'Этап 3: Финальный синтез...';
                 }
                 return 'Совет рассматривает вопрос...';

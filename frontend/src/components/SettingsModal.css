@@ -109,9 +109,65 @@
 }
 
 .settings-model-name {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.settings-model-test-btn {
+  /* скрыта по умолчанию - появляется при наведении на строку */
+  visibility: hidden;
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 2px 10px;
+  background: transparent;
+  border: 1px solid #4a90e2;
+  border-radius: 4px;
+  color: #4a90e2;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background 0.2s,
+    color 0.2s,
+    border-color 0.2s;
+}
+
+.settings-model-item:hover .settings-model-test-btn,
+.settings-model-test-btn.tested {
+  /* после клика кнопка остаётся видимой и без наведения */
+  visibility: visible;
+}
+
+.settings-model-test-btn:hover:not(:disabled) {
+  background: #4a90e2;
+  color: #fff;
+}
+
+.settings-model-test-btn:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+.settings-model-test-btn.ok {
+  border-color: #27ae60;
+  color: #27ae60;
+}
+
+.settings-model-test-btn.ok:hover:not(:disabled) {
+  background: #27ae60;
+  color: #fff;
+}
+
+.settings-model-test-btn.fail {
+  border-color: #c0392b;
+  color: #c0392b;
+}
+
+.settings-model-test-btn.fail:hover:not(:disabled) {
+  background: #c0392b;
+  color: #fff;
 }
 
 .settings-chairman-select {
