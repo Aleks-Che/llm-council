@@ -1,161 +1,148 @@
-/**
- * API client for the LLM Council backend.
- */
+const API_BASE = '';
+const TOKEN_KEY = 'llmcouncil_token';
 
-const API_BASE = 'http://localhost:8002';
+let onUnauthorized = null;
+
+export function setOnUnauthorized(cb) {
+  onUnauthorized = cb;
+}
+
+export function getToken() {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setToken(token) {
+  try {
+    localStorage.setItem(TOKEN_KEY, token);
+  } catch {
+    // localStorage недоступен (приватный режим и т.п.) — сессия не сохранится
+  }
+}
+
+export function clearToken() {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // localStorage недоступен — игнорируем
+  }
+}
+
+async function request(path, options = {}) {
+  const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+  const token = getToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  } catch {
+    throw new Error('Сервер недоступен');
+  }
+
+  // 401 эндпоинта логина — это «неверный логин/пароль», а не истёкшая
+  // сессия: не сбрасываем токен и показываем detail от сервера.
+  const isLogin = path === '/api/auth/login';
+  if (response.status === 401 && !isLogin) {
+    clearToken();
+    if (onUnauthorized) onUnauthorized();
+    throw new Error('Не авторизован');
+  }
+
+  const ct = response.headers.get('content-type') || '';
+  let data = null;
+  if (ct.includes('application/json')) {
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+  } else {
+    try {
+      data = { detail: await response.text() };
+    } catch {
+      data = null;
+    }
+  }
+
+  if (!response.ok) {
+    const detail = data && data.detail;
+    throw new Error(typeof detail === 'string' ? detail : `HTTP ${response.status}`);
+  }
+  return data;
+}
 
 export const api = {
-  /**
-   * List all conversations.
-   */
-  async listConversations() {
-    const response = await fetch(`${API_BASE}/api/conversations`);
-    if (!response.ok) {
-      throw new Error('Failed to list conversations');
-    }
-    return response.json();
-  },
-
-  /**
-   * Create a new conversation.
-   */
-  async createConversation() {
-    const response = await fetch(`${API_BASE}/api/conversations`, {
+  login: (username, password) =>
+    request('/api/auth/login', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      body: JSON.stringify({ username, password }),
+    }),
+
+  me: () => request('/api/auth/me'),
+
+  changePassword: (old_password, new_password) =>
+    request('/api/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ old_password, new_password }),
+    }),
+
+  listUsers: () => request('/api/auth/users'),
+
+  createUser: (data) =>
+    request('/api/auth/users', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  updateUser: (id, data) =>
+    request(`/api/auth/users/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  deleteUser: (id) =>
+    request(`/api/auth/users/${id}`, { method: 'DELETE' }),
+
+  listConversations: () => request('/api/conversations'),
+
+  createConversation: () =>
+    request('/api/conversations', {
+      method: 'POST',
       body: JSON.stringify({}),
-    });
-    if (!response.ok) {
-      throw new Error('Failed to create conversation');
-    }
-    return response.json();
-  },
+    }),
 
-  /**
-   * Get a specific conversation.
-   */
-  async getConversation(conversationId) {
-    const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}`
-    );
-    if (!response.ok) {
-      throw new Error('Failed to get conversation');
-    }
-    return response.json();
-  },
+  getConversation: (id) => request(`/api/conversations/${id}`),
 
-  /**
-   * Rename a conversation.
-   */
-  async renameConversation(conversationId, title) {
-    const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}`,
-      {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ title }),
-      }
-    );
-    if (!response.ok) {
-      throw new Error('Failed to rename conversation');
-    }
-    return response.json();
-  },
+  renameConversation: (id, title) =>
+    request(`/api/conversations/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title }),
+    }),
 
-  /**
-   * Delete a conversation.
-   */
-  async deleteConversation(conversationId) {
-    const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}`,
-      {
-        method: 'DELETE',
-      }
-    );
-    if (!response.ok) {
-      throw new Error('Failed to delete conversation');
-    }
-    return response.json();
-  },
+  deleteConversation: (id) =>
+    request(`/api/conversations/${id}`, { method: 'DELETE' }),
 
-  /**
-   * Get user settings (council composition, chairman, available models).
-   */
-  async getSettings() {
-    const response = await fetch(`${API_BASE}/api/settings`);
-    if (!response.ok) {
-      throw new Error('Failed to get settings');
-    }
-    return response.json();
-  },
-
-  /**
-   * Save user settings.
-   * @param {{council_models: string[], chairman_model: string}} settings
-   */
-  async saveSettings(settings) {
-    const response = await fetch(`${API_BASE}/api/settings`, {
+  sendMessage: (id, content) =>
+    request(`/api/conversations/${id}/message`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      body: JSON.stringify({ content }),
+    }),
+
+  getSettings: () => request('/api/settings'),
+
+  saveSettings: (settings) =>
+    request('/api/settings', {
+      method: 'POST',
       body: JSON.stringify(settings),
-    });
-    if (!response.ok) {
-      let detail = 'Failed to save settings';
-      try {
-        const data = await response.json();
-        if (data?.detail) detail = data.detail;
-      } catch {
-        // keep generic message
-      }
-      throw new Error(detail);
-    }
-    return response.json();
-  },
+    }),
 
-  /**
-   * Run a short connectivity test for a model.
-   * @param {string} modelId
-   * @returns {Promise<{ok: boolean, duration_s: number}>}
-   */
-  async testModel(modelId) {
-    const response = await fetch(`${API_BASE}/api/settings/test-model`, {
+  testModel: (model) =>
+    request('/api/settings/test-model', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ model: modelId }),
-    });
-    if (!response.ok) {
-      throw new Error('Failed to test model');
-    }
-    return response.json();
-  },
-
-  /**
-   * Send a message: the backend starts the council run in the background
-   * and returns immediately. Progress is observed by polling the
-   * conversation.
-   */
-  async sendMessage(conversationId, content) {
-    const response = await fetch(
-      `${API_BASE}/api/conversations/${conversationId}/message`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ content }),
-      }
-    );
-    if (!response.ok) {
-      throw new Error('Failed to send message');
-    }
-    return response.json();
-  },
+      body: JSON.stringify({ model }),
+    }),
 };

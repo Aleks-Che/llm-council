@@ -1,18 +1,14 @@
 import { useState, useEffect, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
+import Login from './components/Login';
 import ErrorBoundary from './components/ErrorBoundary';
-import { api } from './api';
+import { api, setOnUnauthorized, clearToken, getToken } from './api';
 import './App.css';
 
-// Как часто опрашивать текущий диалог и список диалогов во время запусков
 const CONVERSATION_POLL_MS = 2000;
 const LIST_POLL_MS = 3000;
 
-// Лёгкий отпечаток значимых изменений диалога (этапы пишутся на бэкенде
-// атомарно и не меняются после записи). Поллинг неизменившегося диалога
-// даёт тот же отпечаток — кэш не создаёт новую ссылку, и ChatInterface
-// не дёргает автоскролл и не перерисовывает разметку без причины.
 function conversationFingerprint(conv) {
   const messages = conv?.messages ?? [];
   const parts = [String(messages.length)];
@@ -36,17 +32,55 @@ function conversationFingerprint(conv) {
 }
 
 function App() {
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [conversations, setConversations] = useState([]);
   const [currentConversationId, setCurrentConversationId] = useState(null);
-  // Кэш диалогов, ключ — id. Запусками управляет бэкенд, фронтенд только
-  // наблюдает прогресс поллингом, поэтому перезагрузка страницы ничего
-  // не прерывает и несколько диалогов могут выполняться одновременно.
   const [convCache, setConvCache] = useState({});
-  // Навигация по зонам ответа: user / stage1 / stage2 / stage3.
   const [activeSection, setActiveSection] = useState('stage3');
   const chatScrollRef = useRef(null);
-  // Отпечатки последнего загруженного состояния диалогов (см. conversationFingerprint)
   const fpRef = useRef({});
+
+  useEffect(() => {
+    setOnUnauthorized(() => {
+      clearToken();
+      setUser(null);
+    });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const token = getToken();
+    if (!token) {
+      setAuthLoading(false);
+      return;
+    }
+    (async () => {
+      try {
+        const u = await api.me();
+        if (!cancelled) setUser(u);
+      } catch {
+        if (!cancelled) {
+          clearToken();
+          setUser(null);
+        }
+      } finally {
+        if (!cancelled) setAuthLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleLogout = () => {
+    clearToken();
+    setUser(null);
+    setConversations([]);
+    setConvCache({});
+    setCurrentConversationId(null);
+    fpRef.current = {};
+  };
 
   const loadConversations = async () => {
     try {
@@ -61,8 +95,6 @@ function App() {
     try {
       const conv = await api.getConversation(id);
       const fp = conversationFingerprint(conv);
-      // Поллинг не должен создавать новый объект без реальных изменений:
-      // новая ссылка на диалог дёргает автоскролл в ChatInterface.
       if (fpRef.current[id] === fp) return;
       fpRef.current[id] = fp;
       setConvCache((prev) => ({ ...prev, [id]: conv }));
@@ -71,31 +103,24 @@ function App() {
     }
   };
 
-  // Load conversations on mount
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- initial data fetch
+    if (!user) return;
     loadConversations();
-  }, []);
+  }, [user]);
 
   const anyRunning = conversations.some((c) => c.is_running);
 
-  // Пока есть работающие диалоги, опрашиваем список: статусы в сайдбаре,
-  // обновлённые заголовки, переходы running -> complete.
   useEffect(() => {
-    if (!anyRunning) return;
+    if (!user || !anyRunning) return;
     const timer = setInterval(loadConversations, LIST_POLL_MS);
     return () => clearInterval(timer);
-  }, [anyRunning]);
+  }, [user, anyRunning]);
 
-  // Текущий диалог подгружаем при выборе и опрашиваем, пока он в работе.
-  // Повторный запуск эффекта при каждом обновлении списка даёт финальную
-  // подгрузку, когда запуск завершился.
   useEffect(() => {
-    if (!currentConversationId) return;
+    if (!user || !currentConversationId) return;
     const running = conversations.some(
       (c) => c.id === currentConversationId && c.is_running
     );
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch on selection/run start
     loadConversation(currentConversationId);
     if (!running) return;
     const timer = setInterval(
@@ -103,7 +128,7 @@ function App() {
       CONVERSATION_POLL_MS
     );
     return () => clearInterval(timer);
-  }, [currentConversationId, conversations]);
+  }, [user, currentConversationId, conversations]);
 
   const handleNewConversation = async () => {
     try {
@@ -125,7 +150,6 @@ function App() {
     }
   };
 
-  // Последний доступный этап диалога — к нему скроллим при открытии.
   const getLastAvailableSection = (conv) => {
     const last = conv?.messages?.[conv.messages.length - 1];
     if (last?.role === 'assistant') {
@@ -138,7 +162,6 @@ function App() {
 
   const handleSelectConversation = (id) => {
     setCurrentConversationId(id);
-    // Подсветка навигации соответствует месту скролла (последний доступный этап)
     const conv = convCache[id];
     setActiveSection(conv ? getLastAvailableSection(conv) : 'stage3');
   };
@@ -182,14 +205,13 @@ function App() {
     if (!convId) return;
     const base = convCache[convId];
     if (!base) return;
-    // Один запуск на диалог; форма видна только в пустом диалоге, но
-    // защищаемся и от повторного клика.
-    if (base.messages.length > 0 || conversations.some((c) => c.id === convId && c.is_running)) {
+    if (
+      base.messages.length > 0 ||
+      conversations.some((c) => c.id === convId && c.is_running)
+    ) {
       return;
     }
 
-    // Оптимистично показываем сообщение пользователя и заглушку ответа,
-    // реальный прогресс придёт поллингом с бэкенда.
     const userMessage = { role: 'user', content, attachments };
     const assistantMessage = {
       role: 'assistant',
@@ -211,14 +233,20 @@ function App() {
 
     try {
       await api.sendMessage(convId, content);
-      // Сразу обновляем список, чтобы сайдбар показал статус "в работе"
       await loadConversations();
     } catch (error) {
       console.error('Failed to send message:', error);
-      // Откатываем оптимистичные сообщения при ошибке транспорта
       setConvCache((prev) => ({ ...prev, [convId]: base }));
     }
   };
+
+  if (authLoading) {
+    return <div className="app-loading">Загрузка…</div>;
+  }
+
+  if (!user) {
+    return <Login onLogin={setUser} />;
+  }
 
   const displayedConversation = currentConversationId
     ? convCache[currentConversationId] ?? null
@@ -240,6 +268,8 @@ function App() {
         activeSection={activeSection}
         navVisible={Boolean(displayedConversation?.messages?.length)}
         onNavigate={(sectionId) => chatScrollRef.current?.(sectionId)}
+        user={user}
+        onLogout={handleLogout}
       />
       <ErrorBoundary>
         <ChatInterface

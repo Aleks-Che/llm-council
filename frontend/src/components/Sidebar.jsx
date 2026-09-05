@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 
 import SettingsModal from './SettingsModal';
+import UsersModal from './UsersModal';
 
 import './Sidebar.css';
 
@@ -23,11 +24,14 @@ export default function Sidebar({
   activeSection,
   navVisible,
   onNavigate,
+  user,
+  onLogout,
 }) {
   const [contextMenu, setContextMenu] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [usersOpen, setUsersOpen] = useState(false);
   const editInputRef = useRef(null);
   const sidebarRef = useRef(null);
 
@@ -240,8 +244,42 @@ export default function Sidebar({
         </div>
       )}
 
+      <div className="sidebar-footer">
+        {user && (
+          <div className="sidebar-user">
+            <div className="sidebar-user-name">{user.username}</div>
+            <div className="sidebar-user-role">{user.role}</div>
+          </div>
+        )}
+        <div className="sidebar-footer-buttons">
+          {user?.role === 'admin' && (
+            <button
+              className="sidebar-users-btn"
+              onClick={() => setUsersOpen(true)}
+              title="Управление пользователями"
+            >
+              Пользователи
+            </button>
+          )}
+          <button
+            className="sidebar-logout-btn"
+            onClick={onLogout}
+            title="Выйти"
+          >
+            Выйти
+          </button>
+        </div>
+      </div>
+
       {settingsOpen && (
         <SettingsModal onClose={() => setSettingsOpen(false)} />
+      )}
+
+      {usersOpen && user && (
+        <UsersModal
+          onClose={() => setUsersOpen(false)}
+          currentUserId={user.id}
+        />
       )}
     </div>
   );

@@ -1,18 +1,13 @@
-"""Configuration for the LLM Council."""
-
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# OpenAI-compatible proxy (e.g. LiteLLM). Replaces the previous OpenRouter integration.
 OPENAI_COMPATIBLE_URL = os.getenv(
-    "OPENAI_COMPATIBLE_URL", "http://localhost:8001/v1"
+    "OPENAI_COMPATIBLE_URL", "http://0.0.0.0:8001/v1"
 )
-# Optional. Many local proxies do not require auth; header is omitted when unset.
 OPENAI_COMPATIBLE_KEY = os.getenv("OPENAI_COMPATIBLE_KEY")
 
-# Council members - list of (provider, model_name) tuples.
 COUNCIL_MODELS = [
     ("moonshot", "kimi-k3"),
     ("alibaba", "deepseek-v4-pro"),
@@ -21,17 +16,16 @@ COUNCIL_MODELS = [
     ("x-ai", "grok-4.6"),
 ]
 
-# Chairman model - synthesizes final response.
 CHAIRMAN_MODEL = ("moonshot", "kimi-k3")
-
-# Convenience for title generation - small/fast model exposed by the proxy.
 TITLE_MODEL = ("alibaba", "deepseek-v4-flash")
 
-# Chat completions endpoint derived from the base URL.
 CHAT_COMPLETIONS_URL = OPENAI_COMPATIBLE_URL.rstrip("/") + "/chat/completions"
 
-# Data directory for conversation storage
-DATA_DIR = "data/conversations"
+USERS_FILE = "data/users.json"
+USER_DATA_ROOT = "data/users"
+JWT_SECRET_FILE = "data/.jwt_secret"
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRE_MINUTES = 60 * 24 * 7
 
-# User settings file (council composition + chairman overrides)
-SETTINGS_FILE = "data/settings.json"
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")

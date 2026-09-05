@@ -1,53 +1,50 @@
-"""FastAPI backend for LLM Council."""
-
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import uuid
 import time
 
 import httpx
 
-from . import runs, storage, settings_store
+from . import auth, migrate, runs, settings_store, storage, users
 from .client import model_id, query_model
 from .config import COUNCIL_MODELS, CHAIRMAN_MODEL, TITLE_MODEL, OPENAI_COMPATIBLE_URL, OPENAI_COMPATIBLE_KEY
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Запуски, оставшиеся в статусе "running" после перезапуска сервера,
-    # помечаем как прерванные.
+    auth.ensure_jwt_secret()
+    bootstrap = users.ensure_admin_user()
+    admin_user = bootstrap or users.get_first_admin()
+    if admin_user is not None:
+        migrate.migrate_if_needed(admin_user["id"])
     storage.mark_interrupted_runs()
     yield
 
 
 app = FastAPI(title="LLM Council API", lifespan=lifespan)
 
-# Enable CORS for local development
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
 class CreateConversationRequest(BaseModel):
-    """Request to create a new conversation."""
     pass
 
 
 class SendMessageRequest(BaseModel):
-    """Request to send a message in a conversation."""
     content: str
 
 
 class ConversationMetadata(BaseModel):
-    """Conversation metadata for list view."""
     id: str
     created_at: str
     title: str
@@ -56,7 +53,6 @@ class ConversationMetadata(BaseModel):
 
 
 class Conversation(BaseModel):
-    """Full conversation with all messages."""
     id: str
     created_at: str
     title: str
@@ -64,32 +60,46 @@ class Conversation(BaseModel):
 
 
 class UpdateConversationRequest(BaseModel):
-    """Request to update a conversation (e.g. rename)."""
     title: str
 
 
 class SettingsRequest(BaseModel):
-    """Request to save user settings (council composition + chairman)."""
     council_models: List[str]
     chairman_model: str
 
 
 class TestModelRequest(BaseModel):
-    """Request to run a short connectivity test for a single model."""
     model: str
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class CreateUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str = "user"
+
+
+class UpdateUserRequest(BaseModel):
+    username: Optional[str] = None
+    password: Optional[str] = None
+    role: Optional[str] = None
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str
 
 
 @app.get("/")
 async def root():
-    """Health check endpoint."""
     return {"status": "ok", "service": "LLM Council API"}
 
 
 async def fetch_available_models() -> List[str]:
-    """
-    Fetch the list of model ids exposed by the OpenAI-compatible proxy.
-    Returns an empty list if the proxy is unreachable.
-    """
     url = OPENAI_COMPATIBLE_URL.rstrip("/") + "/models"
     headers = {}
     if OPENAI_COMPATIBLE_KEY:
@@ -105,28 +115,94 @@ async def fetch_available_models() -> List[str]:
         return []
 
 
+@app.post("/api/auth/login")
+async def login(request: LoginRequest):
+    user = users.verify_credentials(request.username, request.password)
+    if not user:
+        raise HTTPException(status_code=401, detail="Неверное имя пользователя или пароль")
+    token = auth.create_access_token(user["id"])
+    return {"access_token": token, "token_type": "bearer", "user": users.user_public(user)}
+
+
+@app.get("/api/auth/me")
+async def me(current: dict = Depends(auth.get_current_user)):
+    return users.user_public(current)
+
+
+@app.post("/api/auth/change-password")
+async def change_password(request: ChangePasswordRequest, current: dict = Depends(auth.get_current_user)):
+    if not users.verify_credentials(current["username"], request.old_password):
+        raise HTTPException(status_code=400, detail="Неверный текущий пароль")
+    users.change_password(current["id"], request.new_password)
+    return {"status": "ok"}
+
+
+@app.get("/api/auth/users")
+async def list_users_endpoint(admin: dict = Depends(auth.require_admin)):
+    return [users.user_public(u) for u in users.list_users()]
+
+
+@app.post("/api/auth/users")
+async def create_user_endpoint(request: CreateUserRequest, admin: dict = Depends(auth.require_admin)):
+    try:
+        user = users.create_user(request.username, request.password, request.role)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return users.user_public(user)
+
+
+@app.patch("/api/auth/users/{user_id}")
+async def update_user_endpoint(user_id: str, request: UpdateUserRequest, admin: dict = Depends(auth.require_admin)):
+    if request.username is None and request.password is None and request.role is None:
+        raise HTTPException(status_code=400, detail="Не указаны поля для изменения")
+    empty = []
+    if request.username is not None and (not isinstance(request.username, str) or not request.username.strip()):
+        empty.append("username")
+    if request.password is not None and (not isinstance(request.password, str) or not request.password.strip()):
+        empty.append("password")
+    if request.role is not None and request.role not in ("user", "admin"):
+        raise HTTPException(status_code=400, detail="Неизвестная роль")
+    if empty:
+        raise HTTPException(status_code=400, detail=f"Пустые поля: {', '.join(empty)}")
+    try:
+        updated = users.update_user(
+            user_id,
+            username=request.username,
+            password=request.password,
+            role=request.role,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    return users.user_public(updated)
+
+
+@app.delete("/api/auth/users/{user_id}")
+async def delete_user_endpoint(user_id: str, admin: dict = Depends(auth.require_admin)):
+    if user_id == admin["id"]:
+        raise HTTPException(status_code=400, detail="Нельзя удалить самого себя")
+    target = users.get_user_by_id(user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    if target.get("role") == "admin":
+        remaining = [u for u in users.list_users() if u.get("role") == "admin" and u.get("id") != user_id]
+        if not remaining:
+            raise HTTPException(status_code=400, detail="Нельзя удалить последнего администратора")
+    users.delete_user(user_id)
+    return {"status": "ok", "id": user_id}
+
+
 @app.get("/api/settings")
-async def get_settings():
-    """
-    Get current settings plus the list of models available for selection.
-
-    Checkbox logic for the UI: a model is checked if it is in the effective
-    council list (settings override; config defaults otherwise).
-    """
-    settings = settings_store.get_settings()
+async def get_settings_endpoint(current: dict = Depends(auth.get_current_user)):
+    user_id = current["id"]
+    settings = settings_store.get_settings(user_id)
     defaults = settings_store.default_settings()
-
     proxy_models = await fetch_available_models()
-
-    # Union: proxy models + everything referenced by config/settings,
-    # so the UI stays usable even if the proxy is down.
-    known = {
-        model_id(p, m) for p, m in (*COUNCIL_MODELS, CHAIRMAN_MODEL, TITLE_MODEL)
-    }
+    known = {model_id(p, m) for p, m in (*COUNCIL_MODELS, CHAIRMAN_MODEL, TITLE_MODEL)}
     available = sorted(
         set(proxy_models) | known | set(settings["council_models"]) | {settings["chairman_model"]}
     )
-
     return {
         "available_models": available,
         "council_models": settings["council_models"],
@@ -136,25 +212,20 @@ async def get_settings():
 
 
 @app.post("/api/settings")
-async def save_settings(request: SettingsRequest):
-    """Save user settings (council composition + chairman model)."""
+async def save_settings_endpoint(request: SettingsRequest, current: dict = Depends(auth.get_current_user)):
+    user_id = current["id"]
     try:
-        saved = settings_store.save_settings(request.council_models, request.chairman_model)
+        saved = settings_store.save_settings(user_id, request.council_models, request.chairman_model)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "ok", **saved}
 
 
 @app.post("/api/settings/test-model")
-async def test_model(request: TestModelRequest):
-    """
-    Run a short test query against a single model.
-    Returns {"ok": bool, "duration_s": float} - never raises for model errors.
-    """
+async def test_model(request: TestModelRequest, current: dict = Depends(auth.get_current_user)):
     provider, model_name = settings_store.model_id_to_key(request.model)
     if not model_name.strip():
         raise HTTPException(status_code=400, detail="Пустой идентификатор модели")
-
     started = time.perf_counter()
     response = await query_model(
         provider,
@@ -163,51 +234,46 @@ async def test_model(request: TestModelRequest):
         timeout=60.0,
     )
     duration = round(time.perf_counter() - started, 2)
-
     ok = response is not None and bool((response.get("content") or "").strip())
     return {"ok": ok, "duration_s": duration}
 
 
 @app.get("/api/conversations", response_model=List[ConversationMetadata])
-async def list_conversations():
-    """List all conversations (metadata only, plus live run status)."""
+async def list_conversations(current: dict = Depends(auth.get_current_user)):
+    user_id = current["id"]
     running = runs.running_ids()
     return [
         {**conv, "is_running": conv["id"] in running}
-        for conv in storage.list_conversations()
+        for conv in storage.list_conversations(user_id)
     ]
 
 
 @app.post("/api/conversations", response_model=Conversation)
-async def create_conversation(request: CreateConversationRequest):
-    """Create a new conversation."""
+async def create_conversation(request: CreateConversationRequest, current: dict = Depends(auth.get_current_user)):
+    user_id = current["id"]
     conversation_id = str(uuid.uuid4())
-    conversation = storage.create_conversation(conversation_id)
-    return conversation
+    return storage.create_conversation(user_id, conversation_id)
 
 
 @app.get("/api/conversations/{conversation_id}", response_model=Conversation)
-async def get_conversation(conversation_id: str):
-    """Get a specific conversation with all its messages."""
-    conversation = storage.get_conversation(conversation_id)
+async def get_conversation(conversation_id: str, current: dict = Depends(auth.get_current_user)):
+    user_id = current["id"]
+    conversation = storage.get_conversation(user_id, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return conversation
 
 
 @app.patch("/api/conversations/{conversation_id}", response_model=ConversationMetadata)
-async def update_conversation(conversation_id: str, request: UpdateConversationRequest):
-    """Update a conversation (rename)."""
-    conversation = storage.get_conversation(conversation_id)
+async def update_conversation(conversation_id: str, request: UpdateConversationRequest, current: dict = Depends(auth.get_current_user)):
+    user_id = current["id"]
+    conversation = storage.get_conversation(user_id, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-
     new_title = request.title.strip()
     if not new_title:
         raise HTTPException(status_code=400, detail="Title cannot be empty")
-
-    storage.update_conversation_title(conversation_id, new_title)
-
+    storage.update_conversation_title(user_id, conversation_id, new_title)
     return {
         "id": conversation_id,
         "created_at": conversation["created_at"],
@@ -217,49 +283,30 @@ async def update_conversation(conversation_id: str, request: UpdateConversationR
 
 
 @app.delete("/api/conversations/{conversation_id}")
-async def delete_conversation(conversation_id: str):
-    """Delete a conversation (cancels a background run if there is one)."""
-    runs.cancel(conversation_id)
-    deleted = storage.delete_conversation(conversation_id)
-    if not deleted:
+async def delete_conversation(conversation_id: str, current: dict = Depends(auth.get_current_user)):
+    user_id = current["id"]
+    conversation = storage.get_conversation(user_id, conversation_id)
+    if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    runs.cancel(conversation_id)
+    storage.delete_conversation(user_id, conversation_id)
     return {"status": "ok", "id": conversation_id}
 
 
 @app.post("/api/conversations/{conversation_id}/message")
-async def send_message(conversation_id: str, request: SendMessageRequest):
-    """
-    Send a message and start the 3-stage council process in the background.
-
-    The process runs server-side and persists progress after each stage, so
-    it survives frontend disconnects/reloads. The client polls the
-    conversation to observe progress. Returns immediately.
-    """
-    # Check if conversation exists
-    conversation = storage.get_conversation(conversation_id)
+async def send_message(conversation_id: str, request: SendMessageRequest, current: dict = Depends(auth.get_current_user)):
+    user_id = current["id"]
+    conversation = storage.get_conversation(user_id, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
-
-    # One council run per conversation at a time
     if runs.is_running(conversation_id):
-        raise HTTPException(
-            status_code=409, detail="Conversation already has a run in progress"
-        )
-
-    # Check if this is the first message
+        raise HTTPException(status_code=409, detail="Conversation already has a run in progress")
     is_first_message = len(conversation["messages"]) == 0
-
-    # Persist user message and an empty assistant answer that the
-    # background run will fill in stage by stage
-    storage.add_user_message(conversation_id, request.content)
-    storage.add_assistant_placeholder(conversation_id)
-
-    started = runs.start(conversation_id, request.content, is_first_message)
+    storage.add_user_message(user_id, conversation_id, request.content)
+    storage.add_assistant_placeholder(user_id, conversation_id)
+    started = runs.start(user_id, conversation_id, request.content, is_first_message)
     if not started:
-        raise HTTPException(
-            status_code=409, detail="Conversation already has a run in progress"
-        )
-
+        raise HTTPException(status_code=409, detail="Conversation already has a run in progress")
     return {"status": "started", "conversation_id": conversation_id}
 
 

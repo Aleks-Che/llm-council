@@ -217,3 +217,71 @@
 .context-menu-item.danger:hover {
   background: #fdecea;
 }
+
+.sidebar-footer {
+  border-top: 1px solid #e0e0e0;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #f8f8f8;
+}
+
+.sidebar-user {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-user-name {
+  font-size: 14px;
+  font-weight: 500;
+  color: #333;
+  word-break: break-all;
+}
+
+.sidebar-user-role {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.sidebar-footer-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sidebar-users-btn,
+.sidebar-logout-btn {
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  transition: background 0.2s;
+}
+
+.sidebar-users-btn {
+  background: #fff;
+  color: #4a90e2;
+  border: 1px solid #4a90e2;
+}
+
+.sidebar-users-btn:hover {
+  background: #e8f0fe;
+}
+
+.sidebar-logout-btn {
+  background: #fff;
+  color: #c0392b;
+  border: 1px solid #e0e0e0;
+}
+
+.sidebar-logout-btn:hover {
+  background: #fdecea;
+  border-color: #c0392b;
+}

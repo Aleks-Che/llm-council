@@ -4,164 +4,187 @@ This file contains technical details, architectural decisions, and important imp
 
 ## Project Overview
 
-LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively answer user questions. The key innovation is anonymized peer review in Stage 2, preventing models from playing favorites.
+LLM Council is a 3-stage deliberation system where multiple LLMs collaboratively answer user questions. The key innovation is anonymized peer review in Stage 2, preventing models from playing favorites. Supports **multiple users** with isolated conversations and per-user council settings; authentication via JWT.
 
 ## Architecture
 
 ### Backend Structure (`backend/`)
 
 **`config.py`**
-- Contains `COUNCIL_MODELS` (list of (provider, model_name) tuples routed by the proxy)
-- Contains `CHAIRMAN_MODEL` (model that synthesizes final answer)
-- Uses `OPENAI_COMPATIBLE_URL`/`OPENAI_COMPATIBLE_KEY` from `.env` (points to a local OpenAI-compatible proxy, e.g. LM-Proxy)
-- Backend runs on **port 8002**; the LLM proxy listens on **port 8001**
+- `COUNCIL_MODELS` (list of (provider, model_name) tuples) and `CHAIRMAN_MODEL` — hardcoded defaults.
+- `TITLE_MODEL` — global fast model for title generation (not per-user).
+- `OPENAI_COMPATIBLE_URL`/`OPENAI_COMPATIBLE_KEY` — local OpenAI-compatible proxy (e.g. LM-Proxy).
+- `USERS_FILE`, `USER_DATA_ROOT` — user store and per-user data root (`data/users/{user_id}/`).
+- `JWT_SECRET_FILE`, `JWT_ALGORITHM`, `JWT_EXPIRE_MINUTES` — JWT config.
+- `ADMIN_USERNAME`, `ADMIN_PASSWORD` — optional env to pre-create the first admin.
+- Backend runs on **port 8002**; LLM proxy on **8001**.
 
-**`client.py`** (replaces the old `openrouter.py`)
-- `query_model()`: Single async model query. Default timeout is **600s** — the proxy enables reasoning/thinking on upstreams, and big open-ended prompts can take 2-9 minutes; short timeouts silently kill Stage 1 responses (returns None on failure).
-- `query_models_parallel()`: Parallel queries using `asyncio.gather()`
-- Returns dict with 'content' and optional 'reasoning_details'
-- Graceful degradation: returns None on failure, continues with successful responses
+**`users.py`** — JSON user store (`data/users.json`).
+- Atomic writes (temp + rename), thread lock.
+- bcrypt password hashing (`hashpw`/`checkpw`).
+- Functions: `create_user`, `get_user_by_username/id`, `verify_credentials`, `list_users`, `delete_user`, `change_password`, `count_users`, `get_first_admin`, `ensure_admin_user` (bootstrap), `update_user` (admin-only partial update of username/password/role; protects last admin from demotion), `user_public` (strips hash).
+- First-run bootstrap: if 0 users, creates admin from `ADMIN_USERNAME` + (env `ADMIN_PASSWORD` or auto-generated printed password).
 
-**`council.py`** - The Core Logic
-- `stage1_collect_responses()`: Parallel queries to all council models
-- `stage2_collect_rankings()`:
-  - Anonymizes responses as "Response A, B, C, etc."
-  - Creates `label_to_model` mapping for de-anonymization
-  - Prompts models to evaluate and rank (with strict format requirements)
-  - Returns tuple: (rankings_list, label_to_model_dict)
-  - Each ranking includes both raw text and `parsed_ranking` list
-- `stage3_synthesize_final()`: Chairman synthesizes from all responses + rankings
-- `parse_ranking_from_text()`: Extracts "FINAL RANKING:" section, handles both numbered lists and plain format
-- `calculate_aggregate_rankings()`: Computes average rank position across all peer evaluations
+**`auth.py`** — JWT + FastAPI auth dependencies.
+- `ensure_jwt_secret()`: reads `JWT_SECRET` env → else loads `data/.jwt_secret` → else generates and saves (with WARNING).
+- `create_access_token(user_id)` / `decode_token(token)` — PyJWT HS256, `sub` = user_id, `exp` = now + `JWT_EXPIRE_MINUTES`.
+- `get_current_user(authorization: Header)` dependency — 401 on missing/invalid Bearer.
+- `require_admin` dependency — 403 if not admin.
 
-**`storage.py`**
-- JSON-based conversation storage in `data/conversations/`
-- Each conversation: `{id, created_at, messages[]}`
-- Assistant messages contain: `{role, stage1, stage2, stage3}`
-- Note: metadata (label_to_model, aggregate_rankings) is NOT persisted to storage, only returned via API
+**`client.py`**
+- `query_model()`: single async model query, default **600s** timeout (proxy enables reasoning; long prompts take minutes).
+- `query_models_parallel()`: parallel via `asyncio.gather()`.
+- Graceful degradation: returns None on failure.
+- `ModelKey = Tuple[str, str]`.
 
-**`main.py`**
-- FastAPI app with CORS enabled for localhost:5173 and localhost:3000
-- POST `/api/conversations/{id}/message` returns metadata in addition to stages
-- Metadata includes: label_to_model mapping and aggregate_rankings
+**`council.py`** — 3-stage orchestration (no longer reads global settings).
+- `stage1_collect_responses(user_query, council_models)` — required param.
+- `stage2_collect_rankings(user_query, stage1_results, council_models)` — required param; reuses council_models as judges.
+- `stage3_synthesize_final(user_query, stage1, stage2, chairman_model)` — required param.
+- `parse_ranking_from_text()`, `calculate_aggregate_rankings()` — helpers.
+- `generate_conversation_title(user_query)` — uses global `TITLE_MODEL` from config (not per-user).
+
+**`settings_store.py`** — per-user settings.
+- `get_settings(user_id)`, `save_settings(user_id, ...)`, `get_effective_models(user_id)`.
+- Storage: `data/users/{user_id}/settings.json` (overrides only).
+- Atomic write.
+
+**`storage.py`** — per-user conversation storage.
+- `data/users/{user_id}/conversations/{conv_id}.json`.
+- `get_conversation(user_id, conv_id)` is user-scoped → automatic isolation (other users get None).
+- `mark_interrupted_runs()` walks all `data/users/*/conversations/`.
+- Atomic writes.
+
+**`runs.py`** — background council runs.
+- `start(user_id, conversation_id, query, is_first_message)` resolves the user's settings **once** (snapshot semantics) and passes models into the run task.
+- `ACTIVE_RUNS` keyed by `conversation_id` (uuid is globally unique); stores `user_id` in the entry.
+- `cancel(conversation_id)` used on delete.
+- Title generation runs in parallel with the council.
+
+**`migrate.py`** — one-shot legacy data migration.
+- On first run (no `data/.migrated` marker): moves `data/conversations/*.json` + `data/settings.json` into the first admin's per-user directory, writes marker.
+- Idempotent.
+
+**`main.py`** — FastAPI app, lifespan, endpoints.
+- CORS: localhost:5173, localhost:3000.
+- Lifespan: `ensure_jwt_secret` → `ensure_admin_user` → `migrate_if_needed(first_admin_id)` → `mark_interrupted_runs`.
+- Public endpoints: `POST /api/auth/login`, `GET /`.
+- Authenticated (`Depends(get_current_user)`): `/api/auth/me`, `/api/auth/change-password`, all `/api/conversations*`, `/api/settings`, `/api/settings/test-model`.
+- Admin (`Depends(require_admin)`): `GET/POST /api/auth/users`, `PATCH /api/auth/users/{id}` (update username/password/role; blocks demotion of last admin), `DELETE /api/auth/users/{id}` (blocks self-delete and last-admin delete).
+- Run on port 8002.
 
 ### Frontend Structure (`frontend/src/`)
 
-**`App.jsx`**
-- Main orchestration: manages conversations list and current conversation
-- Handles message sending and metadata storage
-- Important: metadata is stored in the UI state for display but not persisted to backend JSON
+**`api.js`** — single `request()` helper attaches `Authorization: Bearer <token>` from localStorage; 401 → clears token + invokes `onUnauthorized` callback (set by App to show login). Exports `api.*` (login, me, changePassword, listUsers, createUser, deleteUser, conversations CRUD, settings, testModel) plus `getToken/setToken/clearToken`.
 
-**`components/ChatInterface.jsx`**
-- Multiline textarea (3 rows, resizable)
-- Enter to send, Shift+Enter for new line
-- User messages wrapped in markdown-content class for padding
+**`App.jsx`** — auth state + orchestration.
+- On mount: if token present, `api.me()` to validate; on success set `user`, on 401 clear token.
+- `authLoading` splash while validating.
+- If no user → renders `<Login/>`. Otherwise main UI.
+- `handleLogout` clears token + state.
+- All conversation polling/listing gated on `user`.
 
-**`components/Stage1.jsx`**
-- Tab view of individual model responses
-- ReactMarkdown rendering with markdown-content wrapper
+**`components/Login.jsx`** + CSS — username/password form, calls `api.login`, stores token via `setToken`.
 
-**`components/Stage2.jsx`**
-- **Critical Feature**: Tab view showing RAW evaluation text from each model
-- De-anonymization happens CLIENT-SIDE for display (models receive anonymous labels)
-- Shows "Extracted Ranking" below each evaluation so users can validate parsing
-- Aggregate rankings shown with average position and vote count
-- Explanatory text clarifies that boldface model names are for readability only
+**`components/Sidebar.jsx`** — footer with username + role, "Выйти" button, and (admin) "Пользователи" button opening `UsersModal`.
 
-**`components/Stage3.jsx`**
-- Final synthesized answer from chairman
-- Green-tinted background (#f0fff0) to highlight conclusion
+**`components/UsersModal.jsx`** + CSS — admin panel: list users, create (username/password/role), delete (with confirm; backend blocks self/last-admin).
 
-**Styling (`*.css`)**
-- Light mode theme (not dark mode)
-- Primary color: #4a90e2 (blue)
-- Global markdown styling in `index.css` with `.markdown-content` class
-- 12px padding on all markdown content to prevent cluttered appearance
+**`components/SettingsModal.jsx`** — unchanged behaviorally; settings are per-user on backend (resolved via token).
+
+**`components/ChatInterface.jsx`**, **Stage1/2/3.jsx**, **CopyButton**, **ErrorBoundary** — unchanged.
 
 ## Key Design Decisions
 
+### Auth Strategy
+- **JWT (HS256)** in `Authorization: Bearer` header, stored in localStorage. Simple, works across ports (5173→8002) without cookie/SameSite pain.
+- Token contains only `sub` (user_id); no role in token (role looked up fresh per request → admin demotion takes effect immediately).
+- Secret: env `JWT_SECRET` preferred; else auto-generated and persisted to `data/.jwt_secret` with WARNING (delete the file to invalidate all tokens).
+
+### User Isolation
+- Per-user directory `data/users/{user_id}/`. `storage.get_conversation(user_id, ...)` naturally scopes; other users get None for foreign ids → 404.
+- Settings per-user → each user configures their own council.
+
+### Registration Policy
+- **Closed registration**: first admin auto-created on first run; subsequent users created by admins via `POST /api/auth/users`. No public sign-up.
+
+### Settings Snapshot Semantics
+- `runs.start` resolves the user's council **once** at run start. If user changes settings mid-run, the in-flight run uses the old settings (predictable).
+
 ### Stage 2 Prompt Format
-The Stage 2 prompt is very specific to ensure parseable output:
-```
-1. Evaluate each response individually first
-2. Provide "FINAL RANKING:" header
-3. Numbered list format: "1. Response C", "2. Response A", etc.
-4. No additional text after ranking section
-```
+Strict numbered-list format after `FINAL RANKING:` for reliable parsing.
 
-This strict format allows reliable parsing while still getting thoughtful evaluations.
+### De-anonymization
+Models see anonymous labels; backend creates `label_to_model`; frontend renders model names in **bold** for readability.
 
-### De-anonymization Strategy
-- Models receive: "Response A", "Response B", etc.
-- Backend creates mapping: `{"Response A": "openai/gpt-5.1", ...}`
-- Frontend displays model names in **bold** for readability
-- Users see explanation that original evaluation used anonymous labels
-- This prevents bias while maintaining transparency
-
-### Error Handling Philosophy
-- Continue with successful responses if some models fail (graceful degradation)
-- Never fail the entire request due to single model failure
-- Log errors but don't expose to user unless all models fail
+### Error Handling
+Graceful degradation: continue with successful model responses; never fail the whole request due to one model failure.
 
 ### UI/UX Transparency
-- All raw outputs are inspectable via tabs
-- Parsed rankings shown below raw text for validation
-- Users can verify system's interpretation of model outputs
-- This builds trust and allows debugging of edge cases
+All raw outputs inspectable via tabs; parsed rankings shown below raw text.
 
 ## Important Implementation Details
 
 ### Relative Imports
-All backend modules use relative imports (e.g., `from .config import ...`) not absolute imports. This is critical for Python's module system to work correctly when running as `python -m backend.main`.
+All backend modules use relative imports. Run as `python -m backend.main` from project root.
 
 ### Port Configuration
 - Backend: 8002
-- LLM proxy (LM-Proxy, separate repo `proxy-llm`): 8001 (`OPENAI_COMPATIBLE_URL=http://localhost:8001/v1`)
+- LLM proxy: 8001
 - Frontend: 5173 (Vite default)
-- Update both `backend/main.py` and `frontend/src/api.js` if changing the backend port
+
+### LAN access
+- Vite dev/preview binds `0.0.0.0` and proxies `/api` → `http://localhost:8002` (`frontend/vite.config.js`).
+- `frontend/src/api.js` uses relative URLs (`API_BASE = ''`), so the browser always talks to its own origin; the proxy forwards `/api/*` to the backend.
+- Backend CORS: `allow_origins=["*"]`, `allow_credentials=False` (JWT in `Authorization` header, no cookies). Incompatible `*`+credentials would crash on startup.
+- Access from LAN: open `http://<server-lan-ip>:5173` from any device on the same network; the proxy takes care of the API.
 
 ### Markdown Rendering
-All ReactMarkdown components must be wrapped in `<div className="markdown-content">` for proper spacing. This class is defined globally in `index.css`.
+All ReactMarkdown wrapped in `<div className="markdown-content">`.
 
-### Model Configuration
-Models are hardcoded in `backend/config.py`. Chairman can be same or different from council members. The current default is Gemini as chairman per user preference.
+### First-Run Admin Password
+If `ADMIN_PASSWORD` env not set, a random password is generated and **printed to stdout once** at startup. Set `ADMIN_USERNAME`/`ADMIN_PASSWORD` in `.env` to fix it.
+
+### Deleting Users — Safeguards
+Backend refuses: deleting yourself, deleting the last admin.
+
+### Data Migration
+Runs once automatically on first server start after upgrade. Marker: `data/.migrated`. To re-run, delete the marker (but legacy files are already moved — re-run is a no-op unless you restore them).
 
 ## Common Gotchas
 
-1. **Module Import Errors**: Always run backend as `python -m backend.main` from project root, not from backend directory
-2. **CORS Issues**: Frontend must match allowed origins in `main.py` CORS middleware
-3. **Ranking Parse Failures**: If models don't follow format, fallback regex extracts any "Response X" patterns in order
-4. **Missing Metadata**: Metadata is ephemeral (not persisted), only available in API responses
+1. **Module imports**: run as `python -m backend.main` from project root.
+2. **CORS**: origins must match `main.py` whitelist.
+3. **JWT_SECRET**: if you change it (or delete `data/.jwt_secret`), all existing tokens invalidate → users must log in again.
+4. **Conversation IDs are global UUIDs**: `runs.ACTIVE_RUNS` is keyed only by `conversation_id` (uniqueness holds). User isolation is via storage lookup, not the run map.
+5. **Per-user settings**: each user has independent council; one user's change doesn't affect another.
+
+## Data Flow
+
+```
+Login (POST /api/auth/login) → JWT stored in localStorage
+    ↓
+User sends message
+    ↓
+Frontend attaches Authorization: Bearer <token>
+    ↓
+Stage 1: parallel queries to user's council
+    ↓
+Stage 2: anonymize → parallel ranking queries → parse rankings
+    ↓
+Aggregate rankings
+    ↓
+Stage 3: chairman synthesis (user's chairman model)
+    ↓
+Persist progress after each stage; client polls
+```
 
 ## Future Enhancement Ideas
 
-- Configurable council/chairman via UI instead of config file
+- Refresh tokens, token revocation list
+- Rate limiting on /api/auth/login (in-memory per IP)
+- Public registration toggle (env flag)
+- SQLite migration for >10 users / analytics
+- Configurable council/chairman via UI is already done (per-user SettingsModal)
 - Streaming responses instead of batch loading
 - Export conversations to markdown/PDF
-- Model performance analytics over time
-- Custom ranking criteria (not just accuracy/insight)
-- Support for reasoning models (o1, etc.) with special handling
-
-## Testing Notes
-
-Use `python -m backend.test_providers` to verify proxy connectivity and test different model identifiers before adding to council. Supports `--model`, `--prompt`, `--no-parallel`, `--timeout`.
-
-## Data Flow Summary
-
-```
-User Query
-    ↓
-Stage 1: Parallel queries → [individual responses]
-    ↓
-Stage 2: Anonymize → Parallel ranking queries → [evaluations + parsed rankings]
-    ↓
-Aggregate Rankings Calculation → [sorted by avg position]
-    ↓
-Stage 3: Chairman synthesis with full context
-    ↓
-Return: {stage1, stage2, stage3, metadata}
-    ↓
-Frontend: Display with tabs + validation UI
-```
-
-The entire flow is async/parallel where possible to minimize latency.
