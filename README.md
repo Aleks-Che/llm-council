@@ -59,6 +59,10 @@ CHAIRMAN_MODEL = "google/gemini-3-pro-preview"
 
 ## Running the Application
 
+### Optional web research
+
+Enable **Поиск** below the message field to research the question before the council starts. Configure the research model and your Tavily API key in the settings dialog. A shared server key can also be provided through `TAVILY_API_KEY` in `.env`. The council receives a shared evidence packet with citations; search progress and source text remain inspectable. See the [Russian search guide](docs/ru/search.md) for limits, storage, and tests.
+
 **Option 1: Use the start script**
 ```bash
 ./start.sh

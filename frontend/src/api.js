@@ -126,11 +126,16 @@ export const api = {
   deleteConversation: (id) =>
     request(`/api/conversations/${id}`, { method: 'DELETE' }),
 
-  sendMessage: (id, content) =>
+  sendMessage: (id, content, searchEnabled = false) =>
     request(`/api/conversations/${id}/message`, {
       method: 'POST',
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, search_enabled: searchEnabled }),
     }),
+
+  cancelRun: (id) => request(`/api/conversations/${id}/cancel`, { method: 'POST' }),
+
+  getResearchSource: (id, researchId, sourceId) =>
+    request(`/api/conversations/${id}/research/${researchId}/sources/${sourceId}`),
 
   getSettings: () => request('/api/settings'),
 

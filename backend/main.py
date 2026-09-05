@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
 import uuid
 import time
@@ -11,6 +11,7 @@ import httpx
 
 from . import auth, migrate, runs, settings_store, storage, users
 from .client import model_id, query_model
+from .search_config import SearchSettings
 from .config import COUNCIL_MODELS, CHAIRMAN_MODEL, TITLE_MODEL, OPENAI_COMPATIBLE_URL, OPENAI_COMPATIBLE_KEY
 
 
@@ -42,6 +43,7 @@ class CreateConversationRequest(BaseModel):
 
 class SendMessageRequest(BaseModel):
     content: str
+    search_enabled: bool = False
 
 
 class ConversationMetadata(BaseModel):
@@ -66,6 +68,9 @@ class UpdateConversationRequest(BaseModel):
 class SettingsRequest(BaseModel):
     council_models: List[str]
     chairman_model: str
+    search: Optional[SearchSettings] = None
+    tavily_api_key: Optional[str] = Field(default=None, max_length=512)
+    remove_tavily_key: bool = False
 
 
 class TestModelRequest(BaseModel):
@@ -201,12 +206,14 @@ async def get_settings_endpoint(current: dict = Depends(auth.get_current_user)):
     proxy_models = await fetch_available_models()
     known = {model_id(p, m) for p, m in (*COUNCIL_MODELS, CHAIRMAN_MODEL, TITLE_MODEL)}
     available = sorted(
-        set(proxy_models) | known | set(settings["council_models"]) | {settings["chairman_model"]}
+        set(proxy_models) | known | set(settings["council_models"]) | {settings["chairman_model"], settings["search"]["model"]}
     )
     return {
         "available_models": available,
         "council_models": settings["council_models"],
         "chairman_model": settings["chairman_model"],
+        "search": settings["search"],
+        "search_key": settings_store.search_key_status(user_id),
         "defaults": defaults,
     }
 
@@ -215,10 +222,11 @@ async def get_settings_endpoint(current: dict = Depends(auth.get_current_user)):
 async def save_settings_endpoint(request: SettingsRequest, current: dict = Depends(auth.get_current_user)):
     user_id = current["id"]
     try:
-        saved = settings_store.save_settings(user_id, request.council_models, request.chairman_model)
+        saved = settings_store.save_settings(user_id, request.council_models, request.chairman_model,
+            request.search, request.tavily_api_key, request.remove_tavily_key)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    return {"status": "ok", **saved}
+    return {"status": "ok", **saved, "search_key": settings_store.search_key_status(user_id)}
 
 
 @app.post("/api/settings/test-model")
@@ -301,13 +309,40 @@ async def send_message(conversation_id: str, request: SendMessageRequest, curren
         raise HTTPException(status_code=404, detail="Conversation not found")
     if runs.is_running(conversation_id):
         raise HTTPException(status_code=409, detail="Conversation already has a run in progress")
+    if not request.content.strip():
+        raise HTTPException(status_code=400, detail="Введите вопрос или прикрепите файл.")
+    if request.search_enabled and not settings_store.get_search_api_key(user_id):
+        raise HTTPException(status_code=400, detail="Для поиска добавьте ключ Tavily в настройках совета.")
     is_first_message = len(conversation["messages"]) == 0
-    storage.add_user_message(user_id, conversation_id, request.content)
-    storage.add_assistant_placeholder(user_id, conversation_id)
-    started = runs.start(user_id, conversation_id, request.content, is_first_message)
+    storage.add_user_message(user_id, conversation_id, request.content, request.search_enabled)
+    storage.add_assistant_placeholder(user_id, conversation_id, request.search_enabled)
+    started = runs.start(user_id, conversation_id, request.content, is_first_message, request.search_enabled)
     if not started:
         raise HTTPException(status_code=409, detail="Conversation already has a run in progress")
     return {"status": "started", "conversation_id": conversation_id}
+
+
+@app.get("/api/conversations/{conversation_id}/research/{research_id}/sources/{source_id}")
+async def get_research_source(conversation_id: uuid.UUID, research_id: uuid.UUID, source_id: str,
+                              current: dict = Depends(auth.get_current_user)):
+    cid, rid = str(conversation_id), str(research_id)
+    conversation = storage.get_conversation(current["id"], cid)
+    research = next((m["research"] for m in (conversation or {}).get("messages", [])
+                     if (m.get("research") or {}).get("id") == rid), None)
+    if not research or not any(s["id"] == source_id and s["status"] == "read" for s in research["sources"]):
+        raise HTTPException(status_code=404, detail="Источник не найден")
+    document = storage.get_research_document(current["id"], cid, rid, source_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Текст источника не найден")
+    return document
+
+
+@app.post("/api/conversations/{conversation_id}/cancel")
+async def cancel_run(conversation_id: str, current: dict = Depends(auth.get_current_user)):
+    if storage.get_conversation(current["id"], conversation_id) is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    runs.cancel(conversation_id)
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":

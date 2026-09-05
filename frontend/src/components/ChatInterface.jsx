@@ -4,6 +4,8 @@ import remarkGfm from 'remark-gfm';
 import Stage1 from './Stage1';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
+import Research from './Research';
+import { api } from '../api';
 import CopyButton from './CopyButton';
 import ErrorBoundary from './ErrorBoundary';
 import './ChatInterface.css';
@@ -96,6 +98,7 @@ function isStageLoading(msg, stage) {
 
 function messageLoading(msg) {
   return {
+    research: msg?.status === 'running' && msg?.current_stage === 'research',
     stage1: isStageLoading(msg, 'stage1'),
     stage2: isStageLoading(msg, 'stage2'),
     stage3: isStageLoading(msg, 'stage3'),
@@ -112,6 +115,7 @@ function conversationSignature(conversation) {
     messages.length,
     last?.status ?? '',
     last?.current_stage ?? '',
+    last?.research?.phase ?? '',
     Boolean(last?.stage1),
     Boolean(last?.stage2),
     Boolean(last?.stage3),
@@ -130,6 +134,10 @@ export default function ChatInterface({
   const [attachments, setAttachments] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
   const [attachError, setAttachError] = useState(null);
+  const [searchEnabled, setSearchEnabled] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [sendError, setSendError] = useState('');
+  const [cancelling, setCancelling] = useState(false);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const sectionRefs = useRef({});
@@ -151,6 +159,7 @@ export default function ChatInterface({
       if (last.stage3) target = 'stage3';
       else if (last.stage2) target = 'stage2';
       else if (last.stage1) target = 'stage1';
+      else if (last.research) target = 'research';
     }
     const el = sectionRefs.current[target];
     if (el) {
@@ -222,7 +231,7 @@ export default function ChatInterface({
       },
       { root: container, rootMargin: '-10% 0px -65% 0px', threshold: 0 }
     );
-    ['user', 'stage1', 'stage2', 'stage3'].forEach((id) => {
+    ['user', 'research', 'stage1', 'stage2', 'stage3'].forEach((id) => {
       const el = sectionRefs.current[id];
       if (el) observer.observe(el);
     });
@@ -363,16 +372,32 @@ export default function ChatInterface({
     return content;
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    const canSend = (input.trim() || attachments.length > 0) && !isLoading;
+    const canSend = (input.trim() || attachments.length > 0) && !isLoading && !submitting;
     if (canSend) {
-      const meta = attachments.map(({ name, size }) => ({ name, size }));
-      onSendMessage(buildContent(), meta);
-      setInput('');
-      setAttachments([]);
-      setAttachError(null);
+      setSubmitting(true);
+      setSendError('');
+      try {
+        const meta = attachments.map(({ name, size }) => ({ name, size }));
+        await onSendMessage(buildContent(), meta, searchEnabled);
+        setInput('');
+        setAttachments([]);
+        setAttachError(null);
+      } catch (error) {
+        setSendError(error.message || 'Не удалось отправить запрос');
+      } finally {
+        setSubmitting(false);
+      }
     }
+  };
+
+  const handleCancel = async () => {
+    setCancelling(true);
+    setSendError('');
+    try { await api.cancelRun(conversation.id); }
+    catch (error) { setSendError(error.message); }
+    finally { setCancelling(false); }
   };
 
   const handleKeyDown = (e) => {
@@ -394,7 +419,7 @@ export default function ChatInterface({
     );
   }
 
-  const canSend = (input.trim() || attachments.length > 0) && !isLoading;
+  const canSend = (input.trim() || attachments.length > 0) && !isLoading && !submitting;
 
   return (
     <div
@@ -437,7 +462,7 @@ export default function ChatInterface({
                   ref={isLastExchange ? setSectionRef('user') : undefined}
                   data-section="user"
                 >
-                  <div className="message-label">Вы</div>
+                  <div className="message-label">Вы {msg.search_enabled && <span className="message-search-label">· Поиск включён</span>}</div>
                   <div className="message-content">
                     <CopyButton
                       className="user-message-copy"
@@ -470,7 +495,7 @@ export default function ChatInterface({
                   <div className="message-label">LLM Council</div>
 
                   {/* Stage progress: ✓ done / spinner running / ○ pending */}
-                  {(msg.stage1 ||
+                  {(msg.research || loading.research || msg.stage1 ||
                     msg.stage2 ||
                     msg.stage3 ||
                     loading.stage1 ||
@@ -478,21 +503,23 @@ export default function ChatInterface({
                     loading.stage3) && (
                     <div className="stage-progress">
                       {[
+                        ...(msg.research || loading.research ? [{ key: 'research', label: 'Поиск' }] : []),
                         { key: 'stage1', label: 'Этап 1: Ответы моделей' },
                         { key: 'stage2', label: 'Этап 2: Ранжирование' },
                         { key: 'stage3', label: 'Этап 3: Финальный синтез' },
                       ].map((s) => {
-                        const done = Boolean(msg[s.key]);
+                        const done = s.key === 'research' ? Boolean(msg.research && msg.research.status !== 'running') : Boolean(msg[s.key]);
+                        const warning = s.key === 'research' && done && msg.research.status !== 'complete';
                         const running = Boolean(loading[s.key]);
                         return (
                           <span
                             key={s.key}
                             className={`stage-chip ${
-                              done ? 'done' : running ? 'running' : 'pending'
+                              warning ? 'warning' : done ? 'done' : running ? 'running' : 'pending'
                             }`}
                           >
                             {done ? (
-                              <span className="stage-chip-icon">✓</span>
+                              <span className="stage-chip-icon">{warning ? '!' : '✓'}</span>
                             ) : running ? (
                               <span className="stage-chip-spinner"></span>
                             ) : (
@@ -502,6 +529,12 @@ export default function ChatInterface({
                           </span>
                         );
                       })}
+                    </div>
+                  )}
+
+                  {(msg.research || loading.research) && (
+                    <div ref={isLastExchange ? setSectionRef('research') : undefined} data-section="research" className="stage-anchor">
+                      <Research key={msg.research?.id || 'pending'} research={msg.research} conversationId={conversation.id} running={loading.research} />
                     </div>
                   )}
 
@@ -567,6 +600,7 @@ export default function ChatInterface({
                   )}
 
                   {/* Run failed or was interrupted by a server restart */}
+                  {msg.status === 'cancelled' && <div className="research-notice">Запуск остановлен. Собранные материалы сохранены.</div>}
                   {(msg.status === 'error' || msg.status === 'interrupted') && (
                     <div className="stage-error">
                       {msg.status === 'interrupted'
@@ -591,6 +625,7 @@ export default function ChatInterface({
                 const last =
                   conversation.messages[conversation.messages.length - 1];
                 if (last?.role === 'assistant') {
+                  if (last.current_stage === 'research') return 'Собираем информацию для совета…';
                   if (isStageLoading(last, 'stage1'))
                     return 'Этап 1: Сбор индивидуальных ответов...';
                   if (isStageLoading(last, 'stage2'))
@@ -601,9 +636,13 @@ export default function ChatInterface({
                 return 'Совет рассматривает вопрос...';
               })()}
             </span>
+            <button type="button" className="cancel-run-button" onClick={handleCancel} disabled={cancelling}>
+              {cancelling ? 'Останавливаем…' : 'Остановить'}
+            </button>
           </div>
         )}
 
+        {sendError && conversation.messages.length > 0 && <div role="alert" className="stage-error">{sendError}</div>}
         <div ref={messagesEndRef} />
       </div>
 
@@ -636,22 +675,35 @@ export default function ChatInterface({
               </div>
             )}
             {attachError && <div className="attach-error">{attachError}</div>}
+            {sendError && <div role="alert" className="stage-error">{sendError}</div>}
             <textarea
               className="message-input"
+              aria-label="Ваш вопрос"
               placeholder="Задайте ваш вопрос... (Enter — отправить, Shift+Enter — новая строка; файлы — скрепкой или drag&drop; вставка текста > 2000 символов прикрепит его как .txt)"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              disabled={isLoading}
+              disabled={isLoading || submitting}
               rows={3}
             />
           </div>
+          <div className="input-toolbar">
+            <button type="button" className={`search-toggle${searchEnabled ? ' active' : ''}`}
+              aria-pressed={searchEnabled} disabled={isLoading || submitting}
+              onClick={() => setSearchEnabled((enabled) => !enabled)}
+              title={searchEnabled ? 'Поиск включён: сначала собрать источники для совета' : 'Найти источники в интернете перед ответом совета'}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" /><ellipse cx="12" cy="12" rx="4" ry="9" /><path d="M3 12h18M5 6.5h14M5 17.5h14" />
+              </svg>
+              Поиск
+              {searchEnabled && <span className="search-toggle-check" aria-hidden="true">✓</span>}
+            </button>
           <button
             type="button"
             className="attach-button"
             onClick={() => fileInputRef.current?.click()}
-            disabled={isLoading}
+            disabled={isLoading || submitting}
             title="Прикрепить файлы"
           >
             <svg
@@ -674,6 +726,7 @@ export default function ChatInterface({
           >
             Отправить
           </button>
+          </div>
         </form>
       )}
     </div>

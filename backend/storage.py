@@ -78,15 +78,15 @@ def list_conversations(user_id: str) -> List[Dict[str, Any]]:
     return conversations
 
 
-def add_user_message(user_id: str, conversation_id: str, content: str) -> None:
+def add_user_message(user_id: str, conversation_id: str, content: str, search_enabled: bool = False) -> None:
     conversation = get_conversation(user_id, conversation_id)
     if conversation is None:
         raise ValueError(f"Conversation {conversation_id} not found")
-    conversation["messages"].append({"role": "user", "content": content})
+    conversation["messages"].append({"role": "user", "content": content, "search_enabled": search_enabled})
     save_conversation(user_id, conversation)
 
 
-def add_assistant_placeholder(user_id: str, conversation_id: str) -> None:
+def add_assistant_placeholder(user_id: str, conversation_id: str, search_enabled: bool = False) -> None:
     conversation = get_conversation(user_id, conversation_id)
     if conversation is None:
         raise ValueError(f"Conversation {conversation_id} not found")
@@ -96,8 +96,9 @@ def add_assistant_placeholder(user_id: str, conversation_id: str) -> None:
         "stage2": None,
         "stage3": None,
         "metadata": None,
+        "research": None,
         "status": "running",
-        "current_stage": "stage1",
+        "current_stage": "research" if search_enabled else "stage1",
         "error": None,
     })
     save_conversation(user_id, conversation)
@@ -139,6 +140,10 @@ def mark_interrupted_runs() -> None:
                 last["status"] = "interrupted"
                 last["current_stage"] = None
                 last["error"] = "Сервер был перезапущен во время выполнения."
+                research = last.get("research")
+                if research and research.get("status") == "running":
+                    research.update(status="interrupted", phase="done", stop_reason="interrupted")
+                    research["revision"] = research.get("revision", 0) + 1
                 tmp = path + ".tmp"
                 try:
                     with open(tmp, "w", encoding="utf-8") as f:
@@ -161,4 +166,28 @@ def delete_conversation(user_id: str, conversation_id: str) -> bool:
     if not os.path.exists(path):
         return False
     os.remove(path)
+    research_dir = os.path.join(USER_DATA_ROOT, user_id, "research")
+    if os.path.isdir(research_dir):
+        for filename in os.listdir(research_dir):
+            if filename.startswith(f"{conversation_id}-") and filename.endswith(".json"):
+                os.remove(os.path.join(research_dir, filename))
     return True
+
+
+def save_research_documents(user_id: str, conversation_id: str, research_id: str, documents: dict) -> None:
+    directory = os.path.join(USER_DATA_ROOT, user_id, "research")
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, f"{conversation_id}-{research_id}.json")
+    with open(path + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(documents, f, ensure_ascii=False)
+    os.replace(path + ".tmp", path)
+
+
+def get_research_document(user_id: str, conversation_id: str, research_id: str, source_id: str) -> Optional[dict]:
+    # Callers verify both run ownership and identifiers against the saved conversation.
+    path = os.path.join(USER_DATA_ROOT, user_id, "research", f"{conversation_id}-{research_id}.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f).get(source_id)
+    except (OSError, ValueError):
+        return None

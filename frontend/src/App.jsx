@@ -18,6 +18,7 @@ function conversationFingerprint(conv) {
         [
           m.status ?? '',
           m.current_stage ?? '',
+          m.research?.revision ?? 0,
           m.error ?? '',
           m.stage1 ? m.stage1.length : 0,
           m.stage2 ? m.stage2.length : 0,
@@ -156,6 +157,7 @@ function App() {
       if (last.stage3) return 'stage3';
       if (last.stage2) return 'stage2';
       if (last.stage1) return 'stage1';
+      if (last.research) return 'research';
     }
     return 'user';
   };
@@ -200,7 +202,7 @@ function App() {
     }
   };
 
-  const handleSendMessage = async (content, attachments = []) => {
+  const handleSendMessage = async (content, attachments = [], searchEnabled = false) => {
     const convId = currentConversationId;
     if (!convId) return;
     const base = convCache[convId];
@@ -212,7 +214,7 @@ function App() {
       return;
     }
 
-    const userMessage = { role: 'user', content, attachments };
+    const userMessage = { role: 'user', content, attachments, search_enabled: searchEnabled };
     const assistantMessage = {
       role: 'assistant',
       stage1: null,
@@ -220,7 +222,7 @@ function App() {
       stage3: null,
       metadata: null,
       status: 'running',
-      current_stage: 'stage1',
+      current_stage: searchEnabled ? 'research' : 'stage1',
       error: null,
     };
     setConvCache((prev) => ({
@@ -232,11 +234,13 @@ function App() {
     }));
 
     try {
-      await api.sendMessage(convId, content);
+      await api.sendMessage(convId, content, searchEnabled);
       await loadConversations();
     } catch (error) {
       console.error('Failed to send message:', error);
       setConvCache((prev) => ({ ...prev, [convId]: base }));
+      delete fpRef.current[convId];
+      throw error;
     }
   };
 
@@ -267,6 +271,7 @@ function App() {
         onDeleteConversation={handleDeleteConversation}
         activeSection={activeSection}
         navVisible={Boolean(displayedConversation?.messages?.length)}
+        researchVisible={Boolean(lastMessage?.research || lastMessage?.current_stage === 'research')}
         onNavigate={(sectionId) => chatScrollRef.current?.(sectionId)}
         user={user}
         onLogout={handleLogout}

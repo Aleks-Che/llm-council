@@ -8,6 +8,10 @@ export default function SettingsModal({ onClose }) {
   const [availableModels, setAvailableModels] = useState([]);
   const [checkedModels, setCheckedModels] = useState(() => new Set());
   const [chairmanModel, setChairmanModel] = useState('');
+  const [search, setSearch] = useState(null);
+  const [searchKey, setSearchKey] = useState({ configured: false, personal: false });
+  const [apiKey, setApiKey] = useState('');
+  const [removeKey, setRemoveKey] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   // Состояние теста по каждой модели: 'testing' | 'ok' | 'fail' (+ длительность)
@@ -24,6 +28,8 @@ export default function SettingsModal({ onClose }) {
         // (переопределение из settings.json, иначе дефолт конфига).
         setCheckedModels(new Set(data.council_models || []));
         setChairmanModel(data.chairman_model || '');
+        setSearch(data.search);
+        setSearchKey(data.search_key || { configured: false, personal: false });
       } catch {
         if (!cancelled) setLoadError('Не удалось загрузить настройки');
       } finally {
@@ -90,12 +96,25 @@ export default function SettingsModal({ onClose }) {
       setSaveError('Выберите модель Председателя');
       return;
     }
+    if (!search?.model) {
+      setSaveError('Выберите модель для поиска');
+      return;
+    }
+    for (const [key, min, max] of [['max_rounds', 1, 3], ['max_queries', 1, 6], ['max_pages', 1, 12], ['timeout_seconds', 30, 300]]) {
+      if (!Number.isInteger(search[key]) || search[key] < min || search[key] > max) {
+        setSaveError('Проверьте лимиты поиска: 1–3 прохода, 1–6 запросов, 1–12 страниц, 30–300 секунд.');
+        return;
+      }
+    }
     setSaving(true);
     setSaveError(null);
     try {
       await api.saveSettings({
         council_models: council,
         chairman_model: chairmanModel,
+        search,
+        ...(apiKey.trim() ? { tavily_api_key: apiKey.trim() } : {}),
+        remove_tavily_key: removeKey,
       });
       onClose();
     } catch (e) {
@@ -186,6 +205,46 @@ export default function SettingsModal({ onClose }) {
                 ))}
               </select>
             </div>
+
+            {search && (
+              <div className="settings-section settings-search">
+                <div className="settings-section-title">Поиск в интернете</div>
+                <label className="settings-field" htmlFor="search-model">Модель исследования</label>
+                <select id="search-model" className="settings-chairman-select" value={search.model}
+                  onChange={(e) => setSearch({ ...search, model: e.target.value })}>
+                  {availableModels.map((id) => <option key={id} value={id}>{id}</option>)}
+                </select>
+                <p className="settings-search-hint">Планирует поиск, читает источники и проверяет, достаточно ли информации для совета.</p>
+
+                <label className="settings-field" htmlFor="tavily-key">Ключ Tavily API</label>
+                <input id="tavily-key" type="password" autoComplete="new-password"
+                  className="settings-chairman-select" value={apiKey}
+                  placeholder={searchKey.configured && !removeKey ? 'Ключ настроен. Введите новый для замены' : 'tvly-…'}
+                  onChange={(e) => { setApiKey(e.target.value); setRemoveKey(false); }} />
+                <p className="settings-search-hint">
+                  {searchKey.configured && !removeKey ? (searchKey.personal ? 'Личный ключ сохранён на сервере.' : 'Используется ключ сервера.') : 'Для поиска нужен ключ Tavily.'}
+                  {' '}<a href="https://app.tavily.com" target="_blank" rel="noreferrer">Получить ключ</a>
+                </p>
+                {searchKey.personal && (
+                  <label className="settings-remove-key"><input type="checkbox" checked={removeKey}
+                    onChange={(e) => { setRemoveKey(e.target.checked); setApiKey(''); }} /> Удалить личный ключ при сохранении</label>
+                )}
+
+                <div className="settings-search-limits">
+                  {[
+                    ['max_rounds', 'Проходов', 1, 3],
+                    ['max_queries', 'Запросов всего', 1, 6],
+                    ['max_pages', 'Страниц всего', 1, 12],
+                    ['timeout_seconds', 'Время, секунд', 30, 300],
+                  ].map(([key, label, min, max]) => (
+                    <label key={key} className="settings-field">{label}
+                      <input type="number" min={min} max={max} value={search[key]}
+                        onChange={(e) => setSearch({ ...search, [key]: e.target.value === '' ? '' : Number(e.target.value) })} />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {saveError && <div className="settings-error">{saveError}</div>}
 

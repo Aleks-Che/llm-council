@@ -7,6 +7,7 @@ OPENAI_COMPATIBLE_URL = os.getenv(
     "OPENAI_COMPATIBLE_URL", "http://0.0.0.0:8001/v1"
 )
 OPENAI_COMPATIBLE_KEY = os.getenv("OPENAI_COMPATIBLE_KEY")
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip()
 
 COUNCIL_MODELS = [
     ("moonshot", "kimi-k3"),

@@ -23,6 +23,7 @@ export default function Sidebar({
   onDeleteConversation,
   activeSection,
   navVisible,
+  researchVisible,
   onNavigate,
   user,
   onLogout,
@@ -189,6 +190,7 @@ export default function Sidebar({
                       >
                         {[
                           { id: 'user', label: 'Запрос пользователя' },
+                          ...(researchVisible ? [{ id: 'research', label: 'Поиск и источники' }] : []),
                           { id: 'stage1', label: 'Этап 1: Ответы' },
                           { id: 'stage2', label: 'Этап 2: Ранжирование' },
                           { id: 'stage3', label: 'Этап 3: Синтез' },
