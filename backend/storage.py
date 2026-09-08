@@ -94,21 +94,44 @@ def add_user_message(user_id: str, conversation_id: str, content: str, search_en
     save_conversation(user_id, conversation)
 
 
-def add_assistant_placeholder(user_id: str, conversation_id: str, search_enabled: bool = False) -> None:
-    conversation = get_conversation(user_id, conversation_id)
-    if conversation is None:
-        raise ValueError(f"Conversation {conversation_id} not found")
-    conversation["messages"].append({
+def _assistant_placeholder(search_enabled: bool, council_enabled: bool) -> dict:
+    return {
         "role": "assistant",
+        "mode": "council" if council_enabled else "chat",
+        "content": None,
         "stage1": None,
         "stage2": None,
         "stage3": None,
         "metadata": None,
         "research": None,
         "status": "running",
-        "current_stage": "research" if search_enabled else "stage1",
+        "current_stage": "research" if search_enabled else ("stage1" if council_enabled else "chat"),
         "error": None,
-    })
+    }
+
+
+def add_assistant_placeholder(user_id: str, conversation_id: str, search_enabled: bool = False,
+                              council_enabled: bool = True) -> None:
+    conversation = get_conversation(user_id, conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+    conversation["messages"].append(_assistant_placeholder(search_enabled, council_enabled))
+    save_conversation(user_id, conversation)
+
+
+def replace_user_message(user_id: str, conversation_id: str, message_index: int, content: str,
+                         search_enabled: bool = False, council_enabled: bool = False) -> None:
+    conversation = get_conversation(user_id, conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+    messages = conversation["messages"]
+    if not 0 <= message_index < len(messages) or messages[message_index].get("role") != "user":
+        raise ValueError("Запрос для редактирования не найден")
+    conversation["messages"] = messages[:message_index] + [
+        {"role": "user", "content": content, "search_enabled": search_enabled,
+         "edited_at": datetime.now(timezone.utc).isoformat()},
+        _assistant_placeholder(search_enabled, council_enabled),
+    ]
     save_conversation(user_id, conversation)
 
 

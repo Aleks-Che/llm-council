@@ -1,74 +1,24 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import Stage1 from './Stage1';
 import Stage2 from './Stage2';
 import Stage3 from './Stage3';
 import Research from './Research';
+import ModelSelector from './ModelSelector';
+import { modelName } from '../modelNames';
 import { api } from '../api';
 import CopyButton from './CopyButton';
 import ErrorBoundary from './ErrorBoundary';
+import AttachmentPreview from './AttachmentPreview';
+import UserMessageContent from './UserMessageContent';
+import { buildMessageContent, formatSize, parseMessageAttachments } from '../attachments';
 import './ChatInterface.css';
 
 const MAX_FILE_SIZE = 1024 * 1024; // 1 MB на файл
 const MAX_FILES = 10;
 // Вставка текста длиннее этого порога превращается во вложение .txt
 const PASTE_AS_FILE_THRESHOLD = 2000;
-
-function formatSize(bytes) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-// Markdown-файлы и длинные вставки рендерим как разметку.
-const isMarkdownAttachment = (name) =>
-  /\.(md|markdown)$/i.test(String(name)) || /^pasted(?:-\d+)?\.txt$/i.test(String(name));
-
-// В старых сохранённых сообщениях все вложения записаны с ~~~~text-фенсом.
-// Перед рендером помечаем блок как markdown, если имя файла из заголовка
-// вложения (формат создаётся в buildContent) — markdown или pasted*.txt.
-function normalizeMarkdownFences(content) {
-  return String(content ?? '').replace(
-    /(\*\*📎 ([^*]+)\*\*[^\n]*\n+)~~~~text(?=\n)/gi,
-    (match, header, name) => isMarkdownAttachment(name) ? `${header}~~~~markdown` : match
-  );
-}
-
-// Вложенный рендер markdown-вложения внутри сообщения пользователя
-function MarkdownAttachment({ text }) {
-  return (
-    <div className="markdown-attachment">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-    </div>
-  );
-}
-
-// Код-блоки с языком "markdown" (так помечаются .md-вложения и вставки в buildContent)
-// отображаем отрендеренной разметкой; остальные блоки — как обычный код.
-const userMessageComponents = {
-  pre({ node, children, ...props }) {
-    const codeEl = node?.children?.find(
-      (c) => c.type === 'element' && c.tagName === 'code'
-    );
-    const cls = codeEl?.properties?.className || [];
-    if (cls.includes('language-markdown')) {
-      // без <pre>, иначе унаследуется white-space: pre и фон код-блока
-      return <>{children}</>;
-    }
-    return <pre {...props}>{children}</pre>;
-  },
-  code({ node: _node, className, children, ...props }) {
-    if (className === 'language-markdown') {
-      return <MarkdownAttachment text={String(children).replace(/\n$/, '')} />;
-    }
-    return (
-      <code className={className} {...props}>
-        {children}
-      </code>
-    );
-  },
-};
 
 // Читаем файл как текст. Сначала UTF-8; если видим U+FFFD (битая кодировка),
 // повторно читаем как windows-1251 — частый случай для русских .txt.
@@ -103,6 +53,7 @@ function messageLoading(msg) {
     stage1: isStageLoading(msg, 'stage1'),
     stage2: isStageLoading(msg, 'stage2'),
     stage3: isStageLoading(msg, 'stage3'),
+    chat: isStageLoading(msg, 'chat'),
   };
 }
 
@@ -120,6 +71,7 @@ function conversationSignature(conversation) {
     Boolean(last?.stage1),
     Boolean(last?.stage2),
     Boolean(last?.stage3),
+    Boolean(last?.content),
     last?.error ?? '',
   ].join('|');
 }
@@ -131,12 +83,25 @@ export default function ChatInterface({
   isLoading,
   onActiveSectionChange,
   scrollApiRef,
+  settings,
+  settingsError,
+  savingModels,
+  onModelSelection,
+  onReloadSettings,
 }) {
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState([]);
+  const [editSession, setEditSession] = useState(null);
+  const inputRef = useRef(null);
+  const [activeAttachment, setActiveAttachment] = useState(null);
+  const attachmentTriggerRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
   const [attachError, setAttachError] = useState(null);
-  const [searchEnabled, setSearchEnabled] = useState(false);
+  const [searchEnabled, setSearchEnabled] = useState(() => Boolean(conversation?.messages?.findLast((m) => m.role === 'user')?.search_enabled));
+  const [councilEnabled, setCouncilEnabled] = useState(() => {
+    const last = conversation?.messages?.findLast((m) => m.role === 'assistant');
+    return Boolean(last && last.mode !== 'chat');
+  });
   const [submitting, setSubmitting] = useState(false);
   const [sendError, setSendError] = useState('');
   const [cancelling, setCancelling] = useState(false);
@@ -149,6 +114,49 @@ export default function ChatInterface({
   const prevConversationIdRef = useRef(null);
   const prevSignatureRef = useRef(null);
 
+  const openAttachment = (attachment, key, event) => {
+    attachmentTriggerRef.current = event.currentTarget;
+    setActiveAttachment({ ...attachment, key });
+  };
+
+  const closeAttachment = useCallback(() => {
+    setActiveAttachment(null);
+    attachmentTriggerRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  const beginEdit = (message, messageIndex) => {
+    if (isLoading || submitting || retrying || cancelling) return;
+    const parsed = parseMessageAttachments(message.content);
+    setEditSession({
+      messageIndex, originalContent: message.content, messageCount: conversation.messages.length,
+      draft: editSession?.draft ?? { input, attachments, searchEnabled, councilEnabled },
+    });
+    setInput(parsed.text);
+    setAttachments(parsed.attachments.map((attachment, index) => ({
+      ...attachment, id: `edit-${messageIndex}-${index}`, size: new Blob([attachment.content]).size,
+    })));
+    setSearchEnabled(Boolean(message.search_enabled));
+    const answer = conversation.messages[messageIndex + 1];
+    if (answer?.role === 'assistant') setCouncilEnabled(answer.mode !== 'chat');
+    setActiveAttachment(null);
+    setSendError('');
+    setAttachError(null);
+    inputRef.current?.focus();
+  };
+
+  const restoreDraft = () => {
+    const draft = editSession.draft;
+    setInput(draft.input);
+    setAttachments(draft.attachments);
+    setSearchEnabled(draft.searchEnabled);
+    setCouncilEnabled(draft.councilEnabled);
+    setEditSession(null);
+    setActiveAttachment(null);
+    setSendError('');
+    setAttachError(null);
+    inputRef.current?.focus();
+  };
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -159,7 +167,8 @@ export default function ChatInterface({
     const last = messages[messages.length - 1];
     let target = 'user';
     if (last?.role === 'assistant') {
-      if (last.stage3) target = 'stage3';
+      if (last.mode === 'chat' && last.content) target = 'chat';
+      else if (last.stage3) target = 'stage3';
       else if (last.stage2) target = 'stage2';
       else if (last.stage1) target = 'stage1';
       else if (last.research) target = 'research';
@@ -234,7 +243,7 @@ export default function ChatInterface({
       },
       { root: container, rootMargin: '-10% 0px -65% 0px', threshold: 0 }
     );
-    ['user', 'research', 'stage1', 'stage2', 'stage3'].forEach((id) => {
+    ['user', 'research', 'stage1', 'stage2', 'stage3', 'chat'].forEach((id) => {
       const el = sectionRefs.current[id];
       if (el) observer.observe(el);
     });
@@ -290,6 +299,7 @@ export default function ChatInterface({
 
   const removeAttachment = (id) => {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
+    if (activeAttachment?.key === `draft-${id}`) setActiveAttachment(null);
   };
 
   // Вставка длинного текста (> 2000 символов): прикрепляем как .txt,
@@ -362,30 +372,29 @@ export default function ChatInterface({
     addFiles(e.dataTransfer?.files);
   };
 
-  const buildContent = () => {
-    let content = input.trim();
-    if (attachments.length > 0) {
-      const parts = attachments.map((a) => {
-        // Markdown-файлы и вставки помечаем для рендера разметкой в UI.
-        const lang = isMarkdownAttachment(a.name) ? 'markdown' : 'text';
-        return `**📎 ${a.name}** (${formatSize(a.size)}):\n\n~~~~${lang}\n${a.content}\n~~~~`;
-      });
-      content += `${content ? '\n\n' : ''}---\n\n**Прикреплённые файлы:**\n\n${parts.join('\n\n')}`;
-    }
-    return content;
-  };
-
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const canSend = (input.trim() || attachments.length > 0) && !isLoading && !submitting;
+    const canSend = (input.trim() || attachments.length > 0) && !isLoading && !submitting && settings && !savingModels;
     if (canSend) {
       setSubmitting(true);
       setSendError('');
       try {
         const meta = attachments.map(({ name, size }) => ({ name, size }));
-        await onSendMessage(buildContent(), meta, searchEnabled);
-        setInput('');
-        setAttachments([]);
+        await onSendMessage(buildMessageContent(input, attachments), meta, searchEnabled, {
+          council_enabled: councilEnabled,
+          chat_model: settings.chat_model || settings.chairman_model,
+          council_models: settings.council_models,
+          chairman_model: settings.chairman_model,
+        }, editSession && {
+          messageIndex: editSession.messageIndex, originalContent: editSession.originalContent,
+          messageCount: editSession.messageCount,
+        });
+        if (editSession) restoreDraft();
+        else {
+          setInput('');
+          setAttachments([]);
+        }
+        setActiveAttachment(null);
         setAttachError(null);
       } catch (error) {
         setSendError(error.message || 'Не удалось отправить запрос');
@@ -404,10 +413,14 @@ export default function ChatInterface({
   };
 
   const handleRetry = async () => {
-    if (retrying || isLoading) return;
+    const chatRetry = conversation.messages.at(-1)?.mode === 'chat';
+    if (editSession || retrying || isLoading || submitting || savingModels || (chatRetry && !settings)) return;
     setRetrying(true);
     setSendError('');
-    try { await onRetryRun(conversation.id); }
+    try {
+      await onRetryRun(conversation.id, chatRetry
+        ? { chat_model: settings.chat_model || settings.chairman_model } : {});
+    }
     catch (error) { setSendError(error.message || 'Не удалось повторить запуск'); }
     finally { setRetrying(false); }
   };
@@ -431,9 +444,10 @@ export default function ChatInterface({
     );
   }
 
-  const canSend = (input.trim() || attachments.length > 0) && !isLoading && !submitting;
+  const canSend = (input.trim() || attachments.length > 0) && !isLoading && !submitting && settings && !savingModels;
 
   return (
+    <div className="chat-workspace">
     <div
       className={`chat-interface${isDragging ? ' drag-over' : ''}`}
       onDragEnter={handleDragEnter}
@@ -441,6 +455,9 @@ export default function ChatInterface({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      <ModelSelector key={councilEnabled ? 'council' : 'chat'} councilEnabled={councilEnabled}
+        settings={settings} disabled={isLoading || submitting || savingModels || retrying} error={settingsError}
+        onChange={onModelSelection} onReload={onReloadSettings} />
       {isDragging && (
         <div className="drop-overlay">
           <div className="drop-overlay-inner">
@@ -453,7 +470,7 @@ export default function ChatInterface({
         {conversation.messages.length === 0 ? (
           <div className="empty-state">
             <h2>Начните диалог</h2>
-            <p>Задайте вопрос Совету LLM</p>
+            <p>{councilEnabled ? 'Задайте вопрос Совету LLM' : 'Задайте вопрос выбранной модели'}</p>
           </div>
         ) : (
           conversation.messages.map((msg, index) => {
@@ -470,41 +487,18 @@ export default function ChatInterface({
             <div className="message-group">
               {msg.role === 'user' ? (
                 <div
-                  className="user-message"
+                  className={`user-message${editSession?.messageIndex === index ? ' is-editing' : ''}`}
                   ref={isLastExchange ? setSectionRef('user') : undefined}
                   data-section="user"
                 >
                   <div className="message-label">Вы {msg.search_enabled && <span className="message-search-label">· Поиск включён</span>}</div>
-                  <div className="message-content">
-                    <CopyButton
-                      className="user-message-copy"
-                      text={msg.content}
-                    />
-                    {msg.attachments && msg.attachments.length > 0 && (
-                      <div className="message-attachments">
-                        {msg.attachments.map((a, i) => (
-                          <span key={i} className="attachment-chip">
-                            📎 {a.name}
-                            <span className="attachment-size">
-                              {formatSize(a.size)}
-                            </span>
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    <div className="markdown-content">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={userMessageComponents}
-                      >
-                        {normalizeMarkdownFences(msg.content)}
-                      </ReactMarkdown>
-                    </div>
-                  </div>
+                  <UserMessageContent content={msg.content} messageIndex={index}
+                    activeAttachmentKey={activeAttachment?.key} onOpenAttachment={openAttachment}
+                    onEdit={() => beginEdit(msg, index)} editDisabled={isLoading || submitting || retrying || cancelling} />
                 </div>
               ) : (
                 <div className="assistant-message">
-                  <div className="message-label">LLM Council</div>
+                  <div className="message-label">{msg.mode === 'chat' ? modelName(msg.model, msg.model_labels) : 'LLM Council'}</div>
 
                   {/* Stage progress: ✓ done / spinner running / ○ pending */}
                   {(msg.research || loading.research || msg.stage1 ||
@@ -512,13 +506,14 @@ export default function ChatInterface({
                     msg.stage3 ||
                     loading.stage1 ||
                     loading.stage2 ||
-                    loading.stage3) && (
+                    loading.stage3 || loading.chat || (msg.mode === 'chat' && msg.content && msg.research)) && (
                     <div className="stage-progress">
                       {[
                         ...(msg.research || loading.research ? [{ key: 'research', label: 'Поиск' }] : []),
+                        ...(msg.mode === 'chat' ? [{ key: 'chat', label: 'Ответ модели' }] : [
                         { key: 'stage1', label: 'Этап 1: Ответы моделей' },
                         { key: 'stage2', label: 'Этап 2: Ранжирование' },
-                        { key: 'stage3', label: 'Этап 3: Финальный синтез' },
+                        { key: 'stage3', label: 'Этап 3: Финальный синтез' }]),
                       ].map((s) => {
                         const done = s.key === 'research' ? Boolean(msg.research && msg.research.status !== 'running')
                           : msg.completed_stages ? msg.completed_stages.includes(s.key) : Boolean(msg[s.key]);
@@ -548,6 +543,16 @@ export default function ChatInterface({
                   {(msg.research || loading.research) && (
                     <div ref={isLastExchange ? setSectionRef('research') : undefined} data-section="research" className="stage-anchor">
                       <Research key={msg.research?.id || 'pending'} research={msg.research} conversationId={conversation.id} running={loading.research} />
+                    </div>
+                  )}
+
+                  {msg.mode === 'chat' && msg.content && (
+                    <div ref={isLastExchange ? setSectionRef('chat') : undefined} data-section="chat"
+                      className="chat-answer stage-anchor">
+                      <CopyButton className="chat-answer-copy" text={msg.content} />
+                      <div className="markdown-content">
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                      </div>
                     </div>
                   )}
 
@@ -626,10 +631,10 @@ export default function ChatInterface({
                   {isLastExchange && ['error', 'interrupted', 'cancelled'].includes(msg.status) && (
                     <div className="retry-run-actions">
                       <button type="button" className="retry-run-button" onClick={handleRetry}
-                        disabled={retrying || isLoading}>
+                        disabled={Boolean(editSession) || retrying || isLoading || submitting || savingModels || (msg.mode === 'chat' && !settings)}>
                         {retrying ? 'Продолжаем…' : 'Повторить'}
                       </button>
-                      <span>Продолжить с незавершённого этапа. Полученные ответы сохранятся.</span>
+                      <span>{msg.mode === 'chat' ? 'Повторить с выбранной моделью. Собранные источники сохранятся.' : 'Продолжить с незавершённого этапа. Полученные ответы сохранятся.'}</span>
                     </div>
                   )}
                 </div>
@@ -648,7 +653,8 @@ export default function ChatInterface({
                 const last =
                   conversation.messages[conversation.messages.length - 1];
                 if (last?.role === 'assistant') {
-                  if (last.current_stage === 'research') return 'Собираем информацию для совета…';
+                  if (last.current_stage === 'research') return 'Собираем информацию для ответа…';
+                  if (isStageLoading(last, 'chat')) return 'Модель готовит ответ…';
                   if (isStageLoading(last, 'stage1'))
                     return 'Этап 1: Сбор индивидуальных ответов...';
                   if (isStageLoading(last, 'stage2'))
@@ -656,7 +662,7 @@ export default function ChatInterface({
                   if (isStageLoading(last, 'stage3'))
                     return 'Этап 3: Финальный синтез...';
                 }
-                return 'Совет рассматривает вопрос...';
+                return last?.mode === 'chat' ? 'Модель готовит ответ…' : 'Совет рассматривает вопрос...';
               })()}
             </span>
             <button type="button" className="cancel-run-button" onClick={handleCancel} disabled={cancelling}>
@@ -665,12 +671,22 @@ export default function ChatInterface({
           </div>
         )}
 
-        {sendError && conversation.messages.length > 0 && <div role="alert" className="stage-error">{sendError}</div>}
         <div ref={messagesEndRef} />
       </div>
 
-      {conversation.messages.length === 0 && (
         <form className="input-form" onSubmit={handleSubmit}>
+          {editSession && (
+            <div className="composer-edit-banner">
+              <div>
+                <strong>Редактирование запроса</strong>
+                <p>{editSession.messageIndex < editSession.messageCount - 2
+                  ? 'После отправки этот запрос и все сообщения после него будут заменены.'
+                  : 'Запрос будет обновлён, ответ — запущен заново.'}</p>
+              </div>
+              <button type="button" onClick={restoreDraft} disabled={submitting || isLoading}
+                aria-label="Отменить редактирование">Отмена</button>
+            </div>
+          )}
           <input
             ref={fileInputRef}
             type="file"
@@ -682,14 +698,22 @@ export default function ChatInterface({
             {attachments.length > 0 && (
               <div className="attachments-bar">
                 {attachments.map((a) => (
-                  <span key={a.id} className="attachment-chip">
-                    📎 {a.name}
-                    <span className="attachment-size">{formatSize(a.size)}</span>
+                  <span key={a.id} className="attachment-chip draft-attachment-chip">
+                    <button type="button" className="attachment-open"
+                      aria-label={`Открыть файл ${a.name}`}
+                      aria-expanded={activeAttachment?.key === `draft-${a.id}`}
+                      aria-controls={activeAttachment?.key === `draft-${a.id}` ? 'attachment-preview' : undefined}
+                      title={a.name} onClick={(event) => openAttachment(a, `draft-${a.id}`, event)}>
+                      <span aria-hidden="true">📎</span>
+                      <span className="attachment-name">{a.name}</span>
+                      <span className="attachment-size">{formatSize(a.size)}</span>
+                    </button>
                     <button
                       type="button"
                       className="attachment-remove"
                       onClick={() => removeAttachment(a.id)}
                       title="Убрать файл"
+                      aria-label={`Убрать файл ${a.name}`}
                     >
                       ×
                     </button>
@@ -700,6 +724,7 @@ export default function ChatInterface({
             {attachError && <div className="attach-error">{attachError}</div>}
             {sendError && <div role="alert" className="stage-error">{sendError}</div>}
             <textarea
+              ref={inputRef}
               className="message-input"
               aria-label="Ваш вопрос"
               placeholder="Задайте ваш вопрос... (Enter — отправить, Shift+Enter — новая строка; файлы — скрепкой или drag&drop; вставка текста > 2000 символов прикрепит его как .txt)"
@@ -715,12 +740,22 @@ export default function ChatInterface({
             <button type="button" className={`search-toggle${searchEnabled ? ' active' : ''}`}
               aria-pressed={searchEnabled} disabled={isLoading || submitting}
               onClick={() => setSearchEnabled((enabled) => !enabled)}
-              title={searchEnabled ? 'Поиск включён: сначала собрать источники для совета' : 'Найти источники в интернете перед ответом совета'}>
+              title={searchEnabled ? 'Поиск включён: сначала собрать источники' : 'Найти источники в интернете перед ответом'}>
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
                 <circle cx="12" cy="12" r="9" /><ellipse cx="12" cy="12" rx="4" ry="9" /><path d="M3 12h18M5 6.5h14M5 17.5h14" />
               </svg>
               Поиск
               {searchEnabled && <span className="search-toggle-check" aria-hidden="true">✓</span>}
+            </button>
+            <button type="button" className={`search-toggle council-toggle${councilEnabled ? ' active' : ''}`}
+              aria-pressed={councilEnabled} disabled={isLoading || submitting || savingModels}
+              onClick={() => setCouncilEnabled((enabled) => !enabled)}
+              title="Совет: ответы нескольких моделей, взаимная оценка и итог председателя">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">
+                <circle cx="12" cy="7" r="3" /><path d="M6 21v-3a6 6 0 0 1 12 0v3M5 5a3 3 0 0 0 0 6M19 5a3 3 0 0 1 0 6M2 20v-3a4 4 0 0 1 3-4M22 20v-3a4 4 0 0 0-3-4" />
+              </svg>
+              Совет
+              {councilEnabled && <span className="search-toggle-check" aria-hidden="true">✓</span>}
             </button>
           <button
             type="button"
@@ -747,11 +782,14 @@ export default function ChatInterface({
             className="send-button"
             disabled={!canSend}
           >
-            Отправить
+            {editSession ? 'Сохранить и отправить' : 'Отправить'}
           </button>
           </div>
         </form>
-      )}
+    </div>
+    {activeAttachment && (
+      <AttachmentPreview key={activeAttachment.key} attachment={activeAttachment} onClose={closeAttachment} />
+    )}
     </div>
   );
 }

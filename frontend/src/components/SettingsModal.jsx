@@ -3,7 +3,7 @@ import { api } from '../api';
 import CustomModelForm from './CustomModelForm';
 import './SettingsModal.css';
 
-export default function SettingsModal({ onClose }) {
+export default function SettingsModal({ onClose, onSaved }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [availableModels, setAvailableModels] = useState([]);
@@ -136,6 +136,7 @@ export default function SettingsModal({ onClose }) {
         ...(apiKey.trim() ? { tavily_api_key: apiKey.trim() } : {}),
         remove_tavily_key: removeKey,
       });
+      onSaved?.();
       onClose();
     } catch (e) {
       setSaveError(e.message || 'Не удалось сохранить настройки');

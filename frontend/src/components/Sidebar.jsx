@@ -24,6 +24,8 @@ export default function Sidebar({
   activeSection,
   navVisible,
   researchVisible,
+  councilVisible,
+  onSettingsSaved,
   onNavigate,
   user,
   onLogout,
@@ -191,9 +193,9 @@ export default function Sidebar({
                         {[
                           { id: 'user', label: 'Запрос пользователя' },
                           ...(researchVisible ? [{ id: 'research', label: 'Поиск и источники' }] : []),
-                          { id: 'stage1', label: 'Этап 1: Ответы' },
+                          ...(councilVisible ? [{ id: 'stage1', label: 'Этап 1: Ответы' },
                           { id: 'stage2', label: 'Этап 2: Ранжирование' },
-                          { id: 'stage3', label: 'Этап 3: Синтез' },
+                          { id: 'stage3', label: 'Этап 3: Синтез' }] : [{ id: 'chat', label: 'Ответ модели' }]),
                         ].map((s) => (
                           <button
                             key={s.id}
@@ -274,7 +276,7 @@ export default function Sidebar({
       </div>
 
       {settingsOpen && (
-        <SettingsModal onClose={() => setSettingsOpen(false)} />
+        <SettingsModal onClose={() => setSettingsOpen(false)} onSaved={onSettingsSaved} />
       )}
 
       {usersOpen && user && (

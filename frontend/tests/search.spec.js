@@ -28,7 +28,9 @@ async function setup(page) {
       const body = request.postDataJSON();
       submitted.push(body);
       if (body.search_enabled && !settings.search_key.configured) return respond({ detail: 'Для поиска добавьте ключ Tavily в настройках совета.' }, 400);
-      conv.messages = [{ role: 'user', content: body.content, search_enabled: body.search_enabled }, { role: 'assistant', status: 'running', current_stage: body.search_enabled ? 'research' : 'stage1' }];
+      conv.messages = [{ role: 'user', content: body.content, search_enabled: body.search_enabled }, { role: 'assistant',
+        mode: body.council_enabled ? 'council' : 'chat', status: 'running',
+        current_stage: body.search_enabled ? 'research' : body.council_enabled ? 'stage1' : 'chat' }];
       return respond({ status: 'started', conversation_id: cid });
     }
     if (path.includes('/sources/')) { sourceLoads++; return respond({ content: 'Сохранённый исходный текст страницы для проверки.', truncated: false }); }
@@ -53,6 +55,7 @@ test('search toggle, recoverable configuration error, settings and persisted res
   expect(buttonBox.y).toBeGreaterThanOrEqual(inputBox.y + inputBox.height);
   expect(Math.abs(buttonBox.x - inputBox.x)).toBeLessThan(2);
   await expect(search).toHaveAttribute('aria-pressed', 'false');
+  await page.getByRole('button', { name: 'Совет', exact: true }).click();
   await input.fill('Как работает поиск источников?');
   await search.click();
   await expect(search).toHaveAttribute('aria-pressed', 'true');
@@ -97,8 +100,9 @@ test('search toggle, recoverable configuration error, settings and persisted res
   await page.screenshot({ path: 'test-results/search-results.png' });
 });
 
-test('search off keeps the existing flow and a running request can be stopped', async ({ page }) => {
+test('council with search off keeps the existing flow and a running request can be stopped', async ({ page }) => {
   const fixture = await setup(page);
+  await page.getByRole('button', { name: 'Совет', exact: true }).click();
   await page.getByRole('textbox', { name: 'Ваш вопрос' }).fill('Обычный вопрос');
   await page.getByRole('button', { name: 'Отправить', exact: true }).click();
   await expect(page.getByText('Этап 1: Сбор индивидуальных ответов...').first()).toBeVisible();

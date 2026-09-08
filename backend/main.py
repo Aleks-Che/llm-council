@@ -45,6 +45,19 @@ class CreateConversationRequest(BaseModel):
 class SendMessageRequest(BaseModel):
     content: str
     search_enabled: bool = False
+    council_enabled: bool = False
+    chat_model: Optional[str] = None
+    council_models: Optional[List[str]] = None
+    chairman_model: Optional[str] = None
+
+
+class RetryRunRequest(BaseModel):
+    chat_model: Optional[str] = None
+
+
+class EditMessageRequest(SendMessageRequest):
+    original_content: str
+    expected_message_count: int = Field(ge=1)
 
 
 class ConversationMetadata(BaseModel):
@@ -73,6 +86,13 @@ class SettingsRequest(BaseModel):
     tavily_api_key: Optional[str] = Field(default=None, max_length=512)
     remove_tavily_key: bool = False
     custom_models: Optional[List[CustomModel]] = Field(default=None, max_length=100)
+    chat_model: Optional[str] = None
+
+
+class ModelSelectionRequest(BaseModel):
+    chat_model: Optional[str] = None
+    council_models: Optional[List[str]] = None
+    chairman_model: Optional[str] = None
 
 
 class TestModelRequest(BaseModel):
@@ -209,13 +229,14 @@ async def get_settings_endpoint(current: dict = Depends(auth.get_current_user)):
     proxy_models = await fetch_available_models()
     known = {model_id(p, m) for p, m in (*COUNCIL_MODELS, CHAIRMAN_MODEL, TITLE_MODEL)}
     available = sorted(
-        set(proxy_models) | known | set(settings["council_models"]) | {settings["chairman_model"], settings["search"]["model"]}
+        set(proxy_models) | known | set(settings["council_models"]) | {settings["chat_model"], settings["chairman_model"], settings["search"]["model"]}
         | {m["id"] for m in settings["custom_models"]}
     )
     return {
         "available_models": available,
         "council_models": settings["council_models"],
         "chairman_model": settings["chairman_model"],
+        "chat_model": settings["chat_model"],
         "search": settings["search"],
         "search_key": settings_store.search_key_status(user_id),
         "custom_models": settings["custom_models"],
@@ -228,10 +249,25 @@ async def save_settings_endpoint(request: SettingsRequest, current: dict = Depen
     user_id = current["id"]
     try:
         saved = settings_store.save_settings(user_id, request.council_models, request.chairman_model,
-            request.search, request.tavily_api_key, request.remove_tavily_key, request.custom_models)
+            request.search, request.tavily_api_key, request.remove_tavily_key, request.custom_models,
+            chat_model=request.chat_model)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "ok", **saved, "search_key": settings_store.search_key_status(user_id)}
+
+
+@app.patch("/api/settings")
+async def update_model_selection(request: ModelSelectionRequest, current: dict = Depends(auth.get_current_user)):
+    settings = settings_store.get_settings(current["id"])
+    changes = request.model_dump(exclude_none=True)
+    try:
+        saved = settings_store.save_settings(
+            current["id"], changes.get("council_models", settings["council_models"]),
+            changes.get("chairman_model", settings["chairman_model"]),
+            chat_model=changes.get("chat_model"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"status": "ok", **saved}
 
 
 @app.post("/api/settings/test-model")
@@ -326,24 +362,69 @@ async def send_message(conversation_id: str, request: SendMessageRequest, curren
         raise HTTPException(status_code=400, detail="Введите вопрос или прикрепите файл.")
     if request.search_enabled and not settings_store.get_search_api_key(user_id):
         raise HTTPException(status_code=400, detail="Для поиска добавьте ключ Tavily в настройках совета.")
+    try:
+        config = runs.prepare_config(user_id, request.search_enabled, request.council_enabled,
+                                     request.chat_model, request.council_models, request.chairman_model)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     is_first_message = len(conversation["messages"]) == 0
     storage.add_user_message(user_id, conversation_id, request.content, request.search_enabled)
-    storage.add_assistant_placeholder(user_id, conversation_id, request.search_enabled)
-    started = runs.start(user_id, conversation_id, request.content, is_first_message, request.search_enabled)
+    storage.add_assistant_placeholder(user_id, conversation_id, request.search_enabled, request.council_enabled)
+    started = runs.start(user_id, conversation_id, request.content, is_first_message,
+                         request.search_enabled, config=config)
     if not started:
         raise HTTPException(status_code=409, detail="Conversation already has a run in progress")
     return {"status": "started", "conversation_id": conversation_id}
 
 
+@app.patch("/api/conversations/{conversation_id}/messages/{message_index}")
+async def edit_message(conversation_id: str, message_index: int, request: EditMessageRequest,
+                       current: dict = Depends(auth.get_current_user)):
+    user_id = current["id"]
+    conversation = storage.get_conversation(user_id, conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if runs.is_running(conversation_id):
+        raise HTTPException(status_code=409, detail="Сначала остановите текущий ответ")
+    messages = conversation["messages"]
+    if not 0 <= message_index < len(messages) or messages[message_index].get("role") != "user":
+        raise HTTPException(status_code=400, detail="Запрос для редактирования не найден")
+    if len(messages) != request.expected_message_count or messages[message_index]["content"] != request.original_content:
+        raise HTTPException(status_code=409, detail="Диалог изменился. Откройте запрос для редактирования заново.")
+    if not request.content.strip():
+        raise HTTPException(status_code=400, detail="Введите вопрос или прикрепите файл.")
+    if request.search_enabled and not settings_store.get_search_api_key(user_id):
+        raise HTTPException(status_code=400, detail="Для поиска добавьте ключ Tavily в настройках совета.")
+    try:
+        config = runs.prepare_config(user_id, request.search_enabled, request.council_enabled,
+                                     request.chat_model, request.council_models, request.chairman_model)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    # Validate everything before replacing the edited exchange and its descendants.
+    # No await separates the running check, replacement and task registration.
+    try:
+        storage.replace_user_message(user_id, conversation_id, message_index, request.content,
+                                     request.search_enabled, request.council_enabled)
+        started = runs.start(user_id, conversation_id, request.content, message_index == 0,
+                             request.search_enabled, config=config)
+        if not started:
+            raise HTTPException(status_code=409, detail="Запуск уже выполняется")
+    except Exception:
+        storage.save_conversation(user_id, conversation)
+        raise
+    return {"status": "started", "conversation_id": conversation_id}
+
+
 @app.post("/api/conversations/{conversation_id}/retry")
-async def retry_run(conversation_id: str, current: dict = Depends(auth.get_current_user)):
+async def retry_run(conversation_id: str, request: Optional[RetryRunRequest] = None,
+                    current: dict = Depends(auth.get_current_user)):
     conversation = storage.get_conversation(current["id"], conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     if runs.is_running(conversation_id):
         raise HTTPException(status_code=409, detail="Запуск уже выполняется")
     try:
-        runs.retry(current["id"], conversation_id)
+        runs.retry(current["id"], conversation_id, chat_model=request.chat_model if request else None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"status": "started", "conversation_id": conversation_id}

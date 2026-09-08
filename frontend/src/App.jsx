@@ -23,10 +23,12 @@ function conversationFingerprint(conv) {
           m.stage1 ? m.stage1.length : 0,
           m.stage2 ? m.stage2.length : 0,
           m.stage3 ? 1 : 0,
+          (m.content ?? '').length,
+          m.mode ?? '',
         ].join(':')
       );
     } else {
-      parts.push(`u:${(m.content ?? '').length}`);
+      parts.push(`u:${(m.content ?? '').length}:${m.edited_at ?? ''}`);
     }
   }
   return parts.join('|');
@@ -39,6 +41,9 @@ function App() {
   const [currentConversationId, setCurrentConversationId] = useState(null);
   const [convCache, setConvCache] = useState({});
   const [activeSection, setActiveSection] = useState('stage3');
+  const [settings, setSettings] = useState(null);
+  const [settingsError, setSettingsError] = useState('');
+  const [savingModels, setSavingModels] = useState(false);
   const chatScrollRef = useRef(null);
   const fpRef = useRef({});
 
@@ -81,6 +86,45 @@ function App() {
     setConvCache({});
     setCurrentConversationId(null);
     fpRef.current = {};
+    setSettings(null);
+    setSettingsError('');
+  };
+
+  const loadSettings = async () => {
+    try {
+      const data = await api.getSettings();
+      setSettings(data);
+      setSettingsError('');
+    } catch (error) {
+      setSettingsError(error.message || 'Не удалось загрузить модели');
+    }
+  };
+
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    api.getSettings().then((data) => {
+      if (!cancelled) { setSettings(data); setSettingsError(''); }
+    }).catch((error) => {
+      if (!cancelled) setSettingsError(error.message || 'Не удалось загрузить модели');
+    });
+    return () => { cancelled = true; };
+  }, [user]);
+
+  const handleModelSelection = async (changes) => {
+    const previous = settings;
+    setSavingModels(true);
+    setSettingsError('');
+    setSettings({ ...previous, ...changes });
+    try {
+      const saved = await api.updateModelSelection(changes);
+      setSettings((prev) => ({ ...prev, ...saved }));
+    } catch (error) {
+      setSettings(previous);
+      setSettingsError(error.message || 'Не удалось сохранить выбор моделей');
+    } finally {
+      setSavingModels(false);
+    }
   };
 
   const loadConversations = async () => {
@@ -154,6 +198,7 @@ function App() {
   const getLastAvailableSection = (conv) => {
     const last = conv?.messages?.[conv.messages.length - 1];
     if (last?.role === 'assistant') {
+      if (last.mode === 'chat' && last.content) return 'chat';
       if (last.stage3) return 'stage3';
       if (last.stage2) return 'stage2';
       if (last.stage1) return 'stage1';
@@ -202,39 +247,52 @@ function App() {
     }
   };
 
-  const handleSendMessage = async (content, attachments = [], searchEnabled = false) => {
+  const handleSendMessage = async (content, attachments = [], searchEnabled = false, options = {}, edit = null) => {
     const convId = currentConversationId;
-    if (!convId) return;
+    if (!convId) throw new Error('Выберите диалог');
     const base = convCache[convId];
-    if (!base) return;
-    if (
-      base.messages.length > 0 ||
-      conversations.some((c) => c.id === convId && c.is_running)
-    ) {
-      return;
+    if (!base) throw new Error('Диалог ещё загружается');
+    if (base.messages.at(-1)?.status === 'running') {
+      throw new Error('Дождитесь завершения текущего ответа');
+    }
+    if (edit && (base.messages.length !== edit.messageCount ||
+      base.messages[edit.messageIndex]?.role !== 'user' ||
+      base.messages[edit.messageIndex]?.content !== edit.originalContent)) {
+      throw new Error('Диалог изменился. Откройте запрос для редактирования заново.');
     }
 
     const userMessage = { role: 'user', content, attachments, search_enabled: searchEnabled };
     const assistantMessage = {
       role: 'assistant',
+      mode: options.council_enabled ? 'council' : 'chat',
+      model: options.chat_model,
+      model_labels: Object.fromEntries((settings?.custom_models || []).map((m) => [m.id, m.model])),
       stage1: null,
       stage2: null,
       stage3: null,
       metadata: null,
       status: 'running',
-      current_stage: searchEnabled ? 'research' : 'stage1',
+      current_stage: searchEnabled ? 'research' : (options.council_enabled ? 'stage1' : 'chat'),
       error: null,
     };
     setConvCache((prev) => ({
       ...prev,
       [convId]: {
         ...base,
-        messages: [...base.messages, userMessage, assistantMessage],
+        messages: [...(edit ? base.messages.slice(0, edit.messageIndex) : base.messages), userMessage, assistantMessage],
       },
     }));
 
     try {
-      await api.sendMessage(convId, content, searchEnabled);
+      if (edit) {
+        await api.editMessage(convId, edit.messageIndex, content, searchEnabled, {
+          ...options, original_content: edit.originalContent, expected_message_count: edit.messageCount,
+        });
+      } else {
+        await api.sendMessage(convId, content, searchEnabled, options);
+      }
+      delete fpRef.current[convId];
+      await loadConversation(convId);
       await loadConversations();
     } catch (error) {
       console.error('Failed to send message:', error);
@@ -244,8 +302,8 @@ function App() {
     }
   };
 
-  const handleRetryRun = async (convId) => {
-    await api.retryRun(convId);
+  const handleRetryRun = async (convId, options = {}) => {
+    await api.retryRun(convId, options);
     delete fpRef.current[convId];
     setConversations((prev) => prev.map((c) => c.id === convId ? { ...c, is_running: true } : c));
     await loadConversation(convId);
@@ -280,19 +338,26 @@ function App() {
         activeSection={activeSection}
         navVisible={Boolean(displayedConversation?.messages?.length)}
         researchVisible={Boolean(lastMessage?.research || lastMessage?.current_stage === 'research')}
+        councilVisible={lastMessage?.mode !== 'chat'}
+        onSettingsSaved={loadSettings}
         onNavigate={(sectionId) => chatScrollRef.current?.(sectionId)}
         user={user}
         onLogout={handleLogout}
       />
       <ErrorBoundary>
         <ChatInterface
-          key={currentConversationId}
+          key={displayedConversation?.id || 'empty'}
           conversation={displayedConversation}
           onSendMessage={handleSendMessage}
           onRetryRun={handleRetryRun}
           isLoading={isCurrentRunning}
           onActiveSectionChange={setActiveSection}
           scrollApiRef={chatScrollRef}
+          settings={settings}
+          settingsError={settingsError}
+          savingModels={savingModels}
+          onModelSelection={handleModelSelection}
+          onReloadSettings={loadSettings}
         />
       </ErrorBoundary>
     </div>

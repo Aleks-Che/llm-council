@@ -21,6 +21,7 @@ def default_settings() -> Dict[str, Any]:
     return {
         "council_models": [model_id(p, m) for p, m in COUNCIL_MODELS],
         "chairman_model": model_id(*CHAIRMAN_MODEL),
+        "chat_model": model_id(*CHAIRMAN_MODEL),
         "search": SearchSettings().model_dump(),
     }
 
@@ -83,6 +84,7 @@ def get_settings(user_id: str) -> Dict[str, Any]:
     data = _read_data(user_id)
     council = data.get("council_models")
     chairman = data.get("chairman_model")
+    chat = data.get("chat_model")
     try:
         search = SearchSettings.model_validate(data.get("search", {})).model_dump()
     except ValueError:
@@ -90,6 +92,7 @@ def get_settings(user_id: str) -> Dict[str, Any]:
     return {
         "council_models": council if _valid_model_list(council) else defaults["council_models"],
         "chairman_model": chairman if isinstance(chairman, str) and chairman.strip() else defaults["chairman_model"],
+        "chat_model": chat if isinstance(chat, str) and chat.strip() else defaults["chat_model"],
         "search": search,
         "custom_models": public_custom_models(user_id),
     }
@@ -100,6 +103,7 @@ def save_settings(
     search: SearchSettings = None, tavily_api_key: str = None,
     remove_tavily_key: bool = False,
     custom_models: List[CustomModel] = None,
+    chat_model: str = None,
 ) -> Dict[str, Any]:
     council_models = [m.strip() for m in council_models if isinstance(m, str) and m.strip()]
     council_models = list(dict.fromkeys(council_models))
@@ -115,9 +119,14 @@ def save_settings(
     if chairman_model != defaults["chairman_model"]:
         overrides["chairman_model"] = chairman_model
     previous = _read_data(user_id)
+    chat_model = get_settings(user_id)["chat_model"] if chat_model is None else chat_model.strip()
+    if not chat_model:
+        raise ValueError("Выберите модель для чата")
+    if chat_model != defaults["chat_model"]:
+        overrides["chat_model"] = chat_model
     connections = (resolve_custom_models(user_id, custom_models) if custom_models is not None
                    else get_model_connections(user_id))
-    selected = council_models + [chairman_model, (search.model if search else get_settings(user_id)["search"]["model"])]
+    selected = council_models + [chairman_model, chat_model, (search.model if search else get_settings(user_id)["search"]["model"])]
     if any(m.startswith("custom/") and m not in connections for m in selected):
         raise ValueError("Выбранная пользовательская модель не найдена")
     if connections:

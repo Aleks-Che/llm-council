@@ -126,20 +126,31 @@ export const api = {
   deleteConversation: (id) =>
     request(`/api/conversations/${id}`, { method: 'DELETE' }),
 
-  sendMessage: (id, content, searchEnabled = false) =>
+  sendMessage: (id, content, searchEnabled = false, options = {}) =>
     request(`/api/conversations/${id}/message`, {
       method: 'POST',
-      body: JSON.stringify({ content, search_enabled: searchEnabled }),
+      body: JSON.stringify({ content, search_enabled: searchEnabled, ...options }),
     }),
 
   cancelRun: (id) => request(`/api/conversations/${id}/cancel`, { method: 'POST' }),
 
-  retryRun: (id) => request(`/api/conversations/${id}/retry`, { method: 'POST' }),
+  editMessage: (id, messageIndex, content, searchEnabled, options) =>
+    request(`/api/conversations/${id}/messages/${messageIndex}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ content, search_enabled: searchEnabled, ...options }),
+    }),
+
+  retryRun: (id, options = {}) => request(`/api/conversations/${id}/retry`, {
+    method: 'POST', body: JSON.stringify(options),
+  }),
 
   getResearchSource: (id, researchId, sourceId) =>
     request(`/api/conversations/${id}/research/${researchId}/sources/${sourceId}`),
 
   getSettings: () => request('/api/settings'),
+
+  updateModelSelection: (settings) =>
+    request('/api/settings', { method: 'PATCH', body: JSON.stringify(settings) }),
 
   saveSettings: (settings) =>
     request('/api/settings', {
