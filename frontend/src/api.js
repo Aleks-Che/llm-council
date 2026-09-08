@@ -134,6 +134,8 @@ export const api = {
 
   cancelRun: (id) => request(`/api/conversations/${id}/cancel`, { method: 'POST' }),
 
+  retryRun: (id) => request(`/api/conversations/${id}/retry`, { method: 'POST' }),
+
   getResearchSource: (id, researchId, sourceId) =>
     request(`/api/conversations/${id}/research/${researchId}/sources/${sourceId}`),
 
@@ -145,9 +147,9 @@ export const api = {
       body: JSON.stringify(settings),
     }),
 
-  testModel: (model) =>
+  testModel: (model, customModels) =>
     request('/api/settings/test-model', {
       method: 'POST',
-      body: JSON.stringify({ model }),
+      body: JSON.stringify({ model, custom_models: customModels }),
     }),
 };

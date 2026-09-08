@@ -2,8 +2,9 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CopyButton from './CopyButton';
 import './Stage3.css';
+import { modelName } from '../modelNames';
 
-export default function Stage3({ finalResponse }) {
+export default function Stage3({ finalResponse, modelLabels }) {
   if (!finalResponse) {
     return null;
   }
@@ -18,7 +19,7 @@ export default function Stage3({ finalResponse }) {
       </div>
       <div className="final-response">
         <div className="chairman-label">
-          Председатель: {model.split('/')[1] || model}
+          Председатель: {modelName(model, modelLabels, true)}
         </div>
         <div className="final-text markdown-content">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{responseText}</ReactMarkdown>

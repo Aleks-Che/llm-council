@@ -1,7 +1,7 @@
 """3-stage LLM Council orchestration."""
 
 from typing import List, Dict, Any, Tuple
-from .client import query_models_parallel, query_model, model_id, ModelKey
+from .client import query_models_parallel, query_model, model_id, model_label, ModelKey
 from .config import COUNCIL_MODELS, CHAIRMAN_MODEL, TITLE_MODEL
 
 
@@ -29,6 +29,7 @@ async def stage1_collect_responses(
     user_query: str,
     council_models: List[ModelKey],
     research_context: str = "",
+    *, on_result=None, on_error=None,
 ) -> List[Dict[str, Any]]:
     """
     Stage 1: Collect individual responses from all council models.
@@ -45,7 +46,12 @@ async def stage1_collect_responses(
     messages = council_messages(user_query, research_context)
 
     # Query all models in parallel
-    responses = await query_models_parallel(council_models, messages)
+    def received(model, response):
+        on_result({"model": model, "response": response["content"]})
+
+    responses = await query_models_parallel(council_models, messages,
+        **({"on_response": received} if on_result else {}),
+        **({"on_error": on_error} if on_error else {}))
 
     # Format results
     stage1_results = []
@@ -64,6 +70,7 @@ async def stage2_collect_rankings(
     stage1_results: List[Dict[str, Any]],
     council_models: List[ModelKey],
     research_context: str = "",
+    *, on_result=None, on_error=None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, str]]:
     """
     Stage 2: Each model ranks the anonymized responses.
@@ -126,7 +133,13 @@ FINAL RANKING:
     messages = council_messages(ranking_prompt, research_context)
 
     # Get rankings from all council models in parallel
-    responses = await query_models_parallel(council_models, messages)
+    def received(model, response):
+        text = response["content"]
+        on_result({"model": model, "ranking": text, "parsed_ranking": parse_ranking_from_text(text)})
+
+    responses = await query_models_parallel(council_models, messages,
+        **({"on_response": received} if on_result else {}),
+        **({"on_error": on_error} if on_error else {}))
 
     # Format results
     stage2_results = []
@@ -165,12 +178,12 @@ async def stage3_synthesize_final(
     """
     # Build comprehensive context for chairman
     stage1_text = "\n\n".join([
-        f"Модель: {result['model']}\nОтвет: {result['response']}"
+        f"Модель: {model_label(result['model'])}\nОтвет: {result['response']}"
         for result in stage1_results
     ])
 
     stage2_text = "\n\n".join([
-        f"Модель: {result['model']}\nОценка: {result['ranking']}"
+        f"Модель: {model_label(result['model'])}\nОценка: {result['ranking']}"
         for result in stage2_results
     ])
 
@@ -193,17 +206,13 @@ async def stage3_synthesize_final(
 
     messages = council_messages(chairman_prompt, research_context)
 
-# Query the chairman model
-    response = await query_model(*chairman_model, messages)
+    # Query the chairman model
+    response = await query_model(*chairman_model, messages, raise_on_error=True)
 
     chairman_id = model_id(*chairman_model)
 
-    if response is None:
-        # Fallback if chairman fails
-        return {
-            "model": chairman_id,
-            "response": "Ошибка: не удалось сгенерировать итоговый синтез."
-        }
+    if response is None or not (response.get("content") or "").strip():
+        raise RuntimeError("Председатель не ответил. Повторите финальный синтез.")
 
     return {
         "model": chairman_id,
@@ -313,7 +322,7 @@ async def generate_conversation_title(user_query: str) -> str:
 
     # Title generation runs in parallel with the council; reasoning models
     # can be slow, so allow a generous timeout (fallback title otherwise).
-    response = await query_model(*TITLE_MODEL, messages, timeout=180.0)
+    response = await query_model(*TITLE_MODEL, messages, timeout=540.0)
 
     if response is None:
         # Fallback to a generic title

@@ -15,6 +15,7 @@ COUNCIL_MODELS = [
     ("alibaba", "qwen3.8-max"),
     ("alibaba", "glm-5.2"),
     ("x-ai", "grok-4.6"),
+    ("minimax", "MiniMax-M3"),
 ]
 
 CHAIRMAN_MODEL = ("moonshot", "kimi-k3")

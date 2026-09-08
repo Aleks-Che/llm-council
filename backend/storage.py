@@ -20,7 +20,15 @@ def _read(user_id: str, conversation_id: str) -> Optional[Dict[str, Any]]:
         return None
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            conversation = json.load(f)
+        # Older versions persisted chairman failures as completed answers.
+        for message in conversation.get("messages", []):
+            if (message.get("role") == "assistant" and message.get("status") == "complete"
+                    and (message.get("stage3") or {}).get("response") ==
+                    "Ошибка: не удалось сгенерировать итоговый синтез."):
+                message.update(status="error", stage3=None, failed_stage="stage3",
+                               error="Не удалось сгенерировать итоговый синтез.")
+        return conversation
     except (json.JSONDecodeError, OSError):
         return None
 
@@ -138,6 +146,7 @@ def mark_interrupted_runs() -> None:
             last = messages[-1]
             if last.get("role") == "assistant" and last.get("status") == "running":
                 last["status"] = "interrupted"
+                last["failed_stage"] = last.get("current_stage")
                 last["current_stage"] = None
                 last["error"] = "Сервер был перезапущен во время выполнения."
                 research = last.get("research")

@@ -244,6 +244,14 @@ function App() {
     }
   };
 
+  const handleRetryRun = async (convId) => {
+    await api.retryRun(convId);
+    delete fpRef.current[convId];
+    setConversations((prev) => prev.map((c) => c.id === convId ? { ...c, is_running: true } : c));
+    await loadConversation(convId);
+    await loadConversations();
+  };
+
   if (authLoading) {
     return <div className="app-loading">Загрузка…</div>;
   }
@@ -278,8 +286,10 @@ function App() {
       />
       <ErrorBoundary>
         <ChatInterface
+          key={currentConversationId}
           conversation={displayedConversation}
           onSendMessage={handleSendMessage}
+          onRetryRun={handleRetryRun}
           isLoading={isCurrentRunning}
           onActiveSectionChange={setActiveSection}
           scrollApiRef={chatScrollRef}

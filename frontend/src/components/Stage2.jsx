@@ -3,20 +3,21 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CopyButton from './CopyButton';
 import './Stage2.css';
+import { modelName } from '../modelNames';
 
-function deAnonymizeText(text, labelToModel) {
+function deAnonymizeText(text, labelToModel, modelLabels) {
   if (!labelToModel) return text;
 
   let result = text;
   // Replace each "Response X" with the actual model name
   Object.entries(labelToModel).forEach(([label, model]) => {
-    const modelShortName = model.split('/')[1] || model;
+    const modelShortName = modelName(model, modelLabels, true);
     result = result.replace(new RegExp(label, 'g'), `**${modelShortName}**`);
   });
   return result;
 }
 
-export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
+export default function Stage2({ rankings, labelToModel, aggregateRankings, modelLabels }) {
   const [activeTab, setActiveTab] = useState(0);
 
   if (!rankings || rankings.length === 0) {
@@ -24,7 +25,7 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
   }
 
   const tab = Math.min(activeTab, rankings.length - 1);
-  const rankingText = deAnonymizeText(rankings[tab].ranking, labelToModel);
+  const rankingText = deAnonymizeText(rankings[tab].ranking, labelToModel, modelLabels);
 
   return (
     <div className="stage stage2">
@@ -43,7 +44,7 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
             className={`tab ${tab === index ? 'active' : ''}`}
             onClick={() => setActiveTab(index)}
           >
-            {rank.model.split('/')[1] || rank.model}
+            {modelName(rank.model, modelLabels, true)}
           </button>
         ))}
       </div>
@@ -51,7 +52,7 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
       <div className="tab-content">
         <div className="tab-content-header">
           <div className="ranking-model">
-            {rankings[tab].model}
+            {modelName(rankings[tab].model, modelLabels)}
           </div>
           <CopyButton text={rankingText} />
         </div>
@@ -69,7 +70,7 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
               {rankings[tab].parsed_ranking.map((label, i) => (
                 <li key={i}>
                   {labelToModel && labelToModel[label]
-                    ? labelToModel[label].split('/')[1] || labelToModel[label]
+                    ? modelName(labelToModel[label], modelLabels, true)
                     : label}
                 </li>
               ))}
@@ -89,7 +90,7 @@ export default function Stage2({ rankings, labelToModel, aggregateRankings }) {
               <div key={index} className="aggregate-item">
                 <span className="rank-position">#{index + 1}</span>
                 <span className="rank-model">
-                  {agg.model.split('/')[1] || agg.model}
+                  {modelName(agg.model, modelLabels, true)}
                 </span>
                 <span className="rank-score">
                   Среднее: {agg.average_rank.toFixed(2)}

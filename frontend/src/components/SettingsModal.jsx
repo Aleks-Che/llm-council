@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
+import CustomModelForm from './CustomModelForm';
 import './SettingsModal.css';
 
 export default function SettingsModal({ onClose }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [availableModels, setAvailableModels] = useState([]);
+  const [customModels, setCustomModels] = useState([]);
+  const [modelEditor, setModelEditor] = useState(null);
   const [checkedModels, setCheckedModels] = useState(() => new Set());
   const [chairmanModel, setChairmanModel] = useState('');
   const [search, setSearch] = useState(null);
@@ -24,6 +27,7 @@ export default function SettingsModal({ onClose }) {
         const data = await api.getSettings();
         if (cancelled) return;
         setAvailableModels(data.available_models || []);
+        setCustomModels(data.custom_models || []);
         // Чекбокс включён, если модель входит в эффективный состав совета
         // (переопределение из settings.json, иначе дефолт конфига).
         setCheckedModels(new Set(data.council_models || []));
@@ -61,6 +65,20 @@ export default function SettingsModal({ onClose }) {
     });
   };
 
+  const modelLabel = (id) => {
+    const custom = customModels.find((m) => m.id === id);
+    return custom ? `${custom.model} · ${new URL(custom.url).host}` : id;
+  };
+
+  const applyCustomModel = (model) => {
+    setCustomModels((prev) => [...prev.filter((m) => m.id !== model.id), model]);
+    setAvailableModels((prev) => prev.includes(model.id) ? prev : [...prev, model.id]);
+    setCheckedModels((prev) => new Set([...prev, model.id]));
+    setTestStates((prev) => { const next = { ...prev }; delete next[model.id]; return next; });
+    setModelEditor(null);
+    setSaveError(null);
+  };
+
   const handleTestModel = async (e, id) => {
     // Кнопка внутри <label> - не даём клику переключить чекбокс
     e.preventDefault();
@@ -69,16 +87,17 @@ export default function SettingsModal({ onClose }) {
 
     setTestStates((prev) => ({ ...prev, [id]: { status: 'testing' } }));
     try {
-      const result = await api.testModel(id);
+      const result = await api.testModel(id, customModels);
       setTestStates((prev) => ({
         ...prev,
         [id]: {
           status: result.ok ? 'ok' : 'fail',
           duration: result.duration_s,
+          error: result.ok ? null : (result.error || 'Модель не ответила или вернула пустой ответ'),
         },
       }));
-    } catch {
-      setTestStates((prev) => ({ ...prev, [id]: { status: 'fail' } }));
+    } catch (error) {
+      setTestStates((prev) => ({ ...prev, [id]: { status: 'fail', error: error.message || 'Не удалось проверить модель' } }));
     }
   };
 
@@ -112,6 +131,7 @@ export default function SettingsModal({ onClose }) {
       await api.saveSettings({
         council_models: council,
         chairman_model: chairmanModel,
+        custom_models: customModels,
         search,
         ...(apiKey.trim() ? { tavily_api_key: apiKey.trim() } : {}),
         remove_tavily_key: removeKey,
@@ -147,6 +167,13 @@ export default function SettingsModal({ onClose }) {
         ) : (
           <>
             <div className="settings-section">
+              <button type="button" className="settings-add-model-btn" disabled={saving || modelEditor !== null}
+                onClick={() => setModelEditor({})}>+ Добавить модель</button>
+              {modelEditor !== null && <CustomModelForm key={modelEditor.id || 'new'}
+                initial={modelEditor.id ? modelEditor : null} onApply={applyCustomModel}
+                onCancel={() => setModelEditor(null)} />}
+            </div>
+            <div className="settings-section">
               <div className="settings-section-title">
                 Модели совета ({checkedModels.size} из {availableModels.length})
               </div>
@@ -161,7 +188,18 @@ export default function SettingsModal({ onClose }) {
                         checked={checkedModels.has(id)}
                         onChange={() => toggleModel(id)}
                       />
-                      <span className="settings-model-name">{id}</span>
+                      <span className="settings-model-details">
+                        <span className="settings-model-name" title={modelLabel(id)}>{modelLabel(id)}</span>
+                        {status === 'fail' && test.error && (
+                          <span className="settings-model-error" role="alert">{test.error}</span>
+                        )}
+                      </span>
+                      {customModels.some((m) => m.id === id) && (
+                        <button type="button" className="settings-model-edit-btn" title={`Изменить ${modelLabel(id)}`}
+                          disabled={saving || modelEditor !== null}
+                          onClick={(e) => { e.preventDefault(); e.stopPropagation();
+                            setModelEditor(customModels.find((m) => m.id === id)); }}>Изменить</button>
+                      )}
                       <button
                         type="button"
                         className={`settings-model-test-btn${
@@ -171,10 +209,10 @@ export default function SettingsModal({ onClose }) {
                           status === 'ok'
                             ? `Ответ за ${test.duration} с`
                             : status === 'fail'
-                              ? 'Модель не ответила или вернула пустой ответ'
+                              ? test.error || 'Модель не ответила или вернула пустой ответ'
                               : 'Отправить тестовый запрос'
                         }
-                        disabled={status === 'testing'}
+                        disabled={status === 'testing' || saving || modelEditor !== null}
                         onClick={(e) => handleTestModel(e, id)}
                       >
                         {status === 'testing'
@@ -194,13 +232,14 @@ export default function SettingsModal({ onClose }) {
             <div className="settings-section">
               <div className="settings-section-title">Председатель</div>
               <select
+                aria-label="Председатель"
                 className="settings-chairman-select"
                 value={chairmanModel}
                 onChange={(e) => setChairmanModel(e.target.value)}
               >
                 {availableModels.map((id) => (
                   <option key={id} value={id}>
-                    {id}
+                    {modelLabel(id)}
                   </option>
                 ))}
               </select>
@@ -212,7 +251,7 @@ export default function SettingsModal({ onClose }) {
                 <label className="settings-field" htmlFor="search-model">Модель исследования</label>
                 <select id="search-model" className="settings-chairman-select" value={search.model}
                   onChange={(e) => setSearch({ ...search, model: e.target.value })}>
-                  {availableModels.map((id) => <option key={id} value={id}>{id}</option>)}
+                  {availableModels.map((id) => <option key={id} value={id}>{modelLabel(id)}</option>)}
                 </select>
                 <p className="settings-search-hint">Планирует поиск, читает источники и проверяет, достаточно ли информации для совета.</p>
 
@@ -250,13 +289,14 @@ export default function SettingsModal({ onClose }) {
 
             <div className="settings-note">
               Настройки применяются к новым сообщениям.
+              {' '}При повторе сохраняется состав совета; параметры подключения моделей берутся из сохранённых настроек.
             </div>
 
             <div className="settings-actions">
               <button
                 className="settings-save-btn"
                 onClick={handleSave}
-                disabled={saving}
+                disabled={saving || modelEditor !== null}
               >
                 {saving ? 'Сохранение…' : 'Сохранить'}
               </button>

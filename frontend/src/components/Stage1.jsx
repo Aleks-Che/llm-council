@@ -3,8 +3,9 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import CopyButton from './CopyButton';
 import './Stage1.css';
+import { modelName } from '../modelNames';
 
-export default function Stage1({ responses }) {
+export default function Stage1({ responses, modelLabels }) {
   const [activeTab, setActiveTab] = useState(0);
 
   if (!Array.isArray(responses) || responses.length === 0) {
@@ -23,14 +24,14 @@ export default function Stage1({ responses }) {
             className={`tab ${tab === index ? 'active' : ''}`}
             onClick={() => setActiveTab(index)}
           >
-            {String(resp?.model ?? '').split('/')[1] || String(resp?.model ?? '?')}
+            {modelName(resp?.model, modelLabels, true)}
           </button>
         ))}
       </div>
 
       <div className="tab-content">
         <div className="tab-content-header">
-          <div className="model-name">{String(responses[tab]?.model ?? '')}</div>
+          <div className="model-name">{modelName(responses[tab]?.model, modelLabels)}</div>
           <CopyButton text={String(responses[tab]?.response ?? '')} />
         </div>
         <div className="response-text markdown-content">

@@ -10,7 +10,8 @@ import time
 import httpx
 
 from . import auth, migrate, runs, settings_store, storage, users
-from .client import model_id, query_model
+from .client import ModelQueryError, model_id, query_model, use_model_connections
+from .model_config import CustomModel
 from .search_config import SearchSettings
 from .config import COUNCIL_MODELS, CHAIRMAN_MODEL, TITLE_MODEL, OPENAI_COMPATIBLE_URL, OPENAI_COMPATIBLE_KEY
 
@@ -71,10 +72,12 @@ class SettingsRequest(BaseModel):
     search: Optional[SearchSettings] = None
     tavily_api_key: Optional[str] = Field(default=None, max_length=512)
     remove_tavily_key: bool = False
+    custom_models: Optional[List[CustomModel]] = Field(default=None, max_length=100)
 
 
 class TestModelRequest(BaseModel):
     model: str
+    custom_models: Optional[List[CustomModel]] = Field(default=None, max_length=100)
 
 
 class LoginRequest(BaseModel):
@@ -207,6 +210,7 @@ async def get_settings_endpoint(current: dict = Depends(auth.get_current_user)):
     known = {model_id(p, m) for p, m in (*COUNCIL_MODELS, CHAIRMAN_MODEL, TITLE_MODEL)}
     available = sorted(
         set(proxy_models) | known | set(settings["council_models"]) | {settings["chairman_model"], settings["search"]["model"]}
+        | {m["id"] for m in settings["custom_models"]}
     )
     return {
         "available_models": available,
@@ -214,6 +218,7 @@ async def get_settings_endpoint(current: dict = Depends(auth.get_current_user)):
         "chairman_model": settings["chairman_model"],
         "search": settings["search"],
         "search_key": settings_store.search_key_status(user_id),
+        "custom_models": settings["custom_models"],
         "defaults": defaults,
     }
 
@@ -223,7 +228,7 @@ async def save_settings_endpoint(request: SettingsRequest, current: dict = Depen
     user_id = current["id"]
     try:
         saved = settings_store.save_settings(user_id, request.council_models, request.chairman_model,
-            request.search, request.tavily_api_key, request.remove_tavily_key)
+            request.search, request.tavily_api_key, request.remove_tavily_key, request.custom_models)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "ok", **saved, "search_key": settings_store.search_key_status(user_id)}
@@ -235,12 +240,20 @@ async def test_model(request: TestModelRequest, current: dict = Depends(auth.get
     if not model_name.strip():
         raise HTTPException(status_code=400, detail="Пустой идентификатор модели")
     started = time.perf_counter()
-    response = await query_model(
-        provider,
-        model_name,
-        [{"role": "user", "content": "Ответь одним словом: 'готов'."}],
-        timeout=60.0,
-    )
+    try:
+        connections = (settings_store.resolve_custom_models(current["id"], request.custom_models)
+                       if request.custom_models is not None else settings_store.get_model_connections(current["id"]))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        with use_model_connections(connections):
+            response = await query_model(
+                provider, model_name,
+                [{"role": "user", "content": "Ответь одним словом: 'готов'."}],
+                timeout=180.0, raise_on_error=True,
+            )
+    except ModelQueryError as exc:
+        return {"ok": False, "duration_s": round(time.perf_counter() - started, 2), "error": str(exc)}
     duration = round(time.perf_counter() - started, 2)
     ok = response is not None and bool((response.get("content") or "").strip())
     return {"ok": ok, "duration_s": duration}
@@ -319,6 +332,20 @@ async def send_message(conversation_id: str, request: SendMessageRequest, curren
     started = runs.start(user_id, conversation_id, request.content, is_first_message, request.search_enabled)
     if not started:
         raise HTTPException(status_code=409, detail="Conversation already has a run in progress")
+    return {"status": "started", "conversation_id": conversation_id}
+
+
+@app.post("/api/conversations/{conversation_id}/retry")
+async def retry_run(conversation_id: str, current: dict = Depends(auth.get_current_user)):
+    conversation = storage.get_conversation(current["id"], conversation_id)
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    if runs.is_running(conversation_id):
+        raise HTTPException(status_code=409, detail="Запуск уже выполняется")
+    try:
+        runs.retry(current["id"], conversation_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"status": "started", "conversation_id": conversation_id}
 
 

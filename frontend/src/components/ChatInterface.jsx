@@ -21,16 +21,17 @@ function formatSize(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-// Markdown-файлы рендерим как разметку, а не как код
-const isMarkdownFile = (name) => /\.(md|markdown)$/i.test(String(name));
+// Markdown-файлы и длинные вставки рендерим как разметку.
+const isMarkdownAttachment = (name) =>
+  /\.(md|markdown)$/i.test(String(name)) || /^pasted(?:-\d+)?\.txt$/i.test(String(name));
 
 // В старых сохранённых сообщениях все вложения записаны с ~~~~text-фенсом.
 // Перед рендером помечаем блок как markdown, если имя файла из заголовка
-// вложения (формат создаётся в buildContent) — markdown.
+// вложения (формат создаётся в buildContent) — markdown или pasted*.txt.
 function normalizeMarkdownFences(content) {
   return String(content ?? '').replace(
-    /(\*\*📎 [^*]+\.(?:md|markdown)\*\*[^\n]*\n+)~~~~text(?=\n)/gi,
-    '$1~~~~markdown'
+    /(\*\*📎 ([^*]+)\*\*[^\n]*\n+)~~~~text(?=\n)/gi,
+    (match, header, name) => isMarkdownAttachment(name) ? `${header}~~~~markdown` : match
   );
 }
 
@@ -43,7 +44,7 @@ function MarkdownAttachment({ text }) {
   );
 }
 
-// Код-блоки с языком "markdown" (так помечаются .md-вложения в buildContent)
+// Код-блоки с языком "markdown" (так помечаются .md-вложения и вставки в buildContent)
 // отображаем отрендеренной разметкой; остальные блоки — как обычный код.
 const userMessageComponents = {
   pre({ node, children, ...props }) {
@@ -93,7 +94,7 @@ function readFileAsText(file) {
 // Какой этап сейчас генерируется — по статусу запуска, сохранённому бэкендом
 // (переживает перезагрузку страницы).
 function isStageLoading(msg, stage) {
-  return msg?.status === 'running' && msg?.current_stage === stage && !msg?.[stage];
+  return msg?.status === 'running' && msg?.current_stage === stage;
 }
 
 function messageLoading(msg) {
@@ -126,6 +127,7 @@ function conversationSignature(conversation) {
 export default function ChatInterface({
   conversation,
   onSendMessage,
+  onRetryRun,
   isLoading,
   onActiveSectionChange,
   scrollApiRef,
@@ -138,6 +140,7 @@ export default function ChatInterface({
   const [submitting, setSubmitting] = useState(false);
   const [sendError, setSendError] = useState('');
   const [cancelling, setCancelling] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const messagesEndRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const sectionRefs = useRef({});
@@ -363,8 +366,8 @@ export default function ChatInterface({
     let content = input.trim();
     if (attachments.length > 0) {
       const parts = attachments.map((a) => {
-        // .md-файлы помечаем языком markdown: в UI они отрендерятся разметкой
-        const lang = isMarkdownFile(a.name) ? 'markdown' : 'text';
+        // Markdown-файлы и вставки помечаем для рендера разметкой в UI.
+        const lang = isMarkdownAttachment(a.name) ? 'markdown' : 'text';
         return `**📎 ${a.name}** (${formatSize(a.size)}):\n\n~~~~${lang}\n${a.content}\n~~~~`;
       });
       content += `${content ? '\n\n' : ''}---\n\n**Прикреплённые файлы:**\n\n${parts.join('\n\n')}`;
@@ -398,6 +401,15 @@ export default function ChatInterface({
     try { await api.cancelRun(conversation.id); }
     catch (error) { setSendError(error.message); }
     finally { setCancelling(false); }
+  };
+
+  const handleRetry = async () => {
+    if (retrying || isLoading) return;
+    setRetrying(true);
+    setSendError('');
+    try { await onRetryRun(conversation.id); }
+    catch (error) { setSendError(error.message || 'Не удалось повторить запуск'); }
+    finally { setRetrying(false); }
   };
 
   const handleKeyDown = (e) => {
@@ -508,7 +520,8 @@ export default function ChatInterface({
                         { key: 'stage2', label: 'Этап 2: Ранжирование' },
                         { key: 'stage3', label: 'Этап 3: Финальный синтез' },
                       ].map((s) => {
-                        const done = s.key === 'research' ? Boolean(msg.research && msg.research.status !== 'running') : Boolean(msg[s.key]);
+                        const done = s.key === 'research' ? Boolean(msg.research && msg.research.status !== 'running')
+                          : msg.completed_stages ? msg.completed_stages.includes(s.key) : Boolean(msg[s.key]);
                         const warning = s.key === 'research' && done && msg.research.status !== 'complete';
                         const running = Boolean(loading[s.key]);
                         return (
@@ -553,7 +566,7 @@ export default function ChatInterface({
                       data-section="stage1"
                       className="stage-anchor"
                     >
-                      <Stage1 responses={msg.stage1} />
+                      <Stage1 responses={msg.stage1} modelLabels={msg.model_labels} />
                     </div>
                   )}
 
@@ -576,6 +589,7 @@ export default function ChatInterface({
                         rankings={msg.stage2}
                         labelToModel={msg.metadata?.label_to_model}
                         aggregateRankings={msg.metadata?.aggregate_rankings}
+                        modelLabels={msg.model_labels}
                       />
                     </div>
                   )}
@@ -595,18 +609,27 @@ export default function ChatInterface({
                       data-section="stage3"
                       className="stage-anchor"
                     >
-                      <Stage3 finalResponse={msg.stage3} />
+                      <Stage3 finalResponse={msg.stage3} modelLabels={msg.model_labels} />
                     </div>
                   )}
 
                   {/* Run failed or was interrupted by a server restart */}
                   {msg.status === 'cancelled' && <div className="research-notice">Запуск остановлен. Собранные материалы сохранены.</div>}
                   {(msg.status === 'error' || msg.status === 'interrupted') && (
-                    <div className="stage-error">
+                    <div className="stage-error" role="alert">
                       {msg.status === 'interrupted'
                         ? '⚠️ Запуск был прерван перезапуском сервера.'
                         : '⚠️ Ошибка при выполнении запуска.'}
                       {msg.error ? ` ${msg.error}` : ''}
+                    </div>
+                  )}
+                  {isLastExchange && ['error', 'interrupted', 'cancelled'].includes(msg.status) && (
+                    <div className="retry-run-actions">
+                      <button type="button" className="retry-run-button" onClick={handleRetry}
+                        disabled={retrying || isLoading}>
+                        {retrying ? 'Продолжаем…' : 'Повторить'}
+                      </button>
+                      <span>Продолжить с незавершённого этапа. Полученные ответы сохранятся.</span>
                     </div>
                   )}
                 </div>

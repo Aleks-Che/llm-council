@@ -109,11 +109,25 @@
   flex-shrink: 0;
 }
 
-.settings-model-name {
+.settings-model-details {
   flex: 1;
+  min-width: 0;
+}
+
+.settings-model-name {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.settings-model-error {
+  display: block;
+  margin-top: 4px;
+  color: #c0392b;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .settings-model-test-btn {
@@ -275,3 +289,33 @@
 }
 
 .settings-remove-key { font-size: 12px; color: #666; }
+.settings-add-model-btn {
+  padding: 8px 14px;
+  border: 1px solid #4a90e2;
+  border-radius: 6px;
+  color: #357abd;
+  background: #f5faff;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.settings-add-model-btn:disabled { opacity: 0.6; cursor: default; }
+
+.settings-custom-form {
+  padding: 14px;
+  margin-top: 12px;
+  border: 1px solid #dce7f3;
+  border-radius: 6px;
+  background: #f8fbff;
+}
+
+.settings-custom-form .settings-field:not(:first-child) { margin-top: 12px; }
+.settings-custom-form .settings-actions { margin-top: 14px; }
+.settings-custom-form .settings-search-hint:last-child { margin-bottom: 0; }
+
+.settings-reasoning-toggle { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 14px; }
+.settings-reasoning-toggle input { accent-color: #4a90e2; }
+.settings-model-edit-btn { background: none; border: none; color: #357abd; cursor: pointer; font: inherit; font-size: 12px; }
+.settings-model-item:focus-within .settings-model-test-btn { visibility: visible; }
+@media (hover: none) { .settings-model-test-btn { visibility: visible; } }
